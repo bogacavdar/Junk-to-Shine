@@ -60,3 +60,18 @@ static func set_shadows(root: Node, enabled: bool) -> void:
 			var g: GeometryInstance3D = c
 			g.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if enabled else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		set_shadows(c, enabled)
+
+
+## Dokusu eksik modellere düz renk verir (tüm yüzeyler için).
+static func tint(root: Node, color: Color) -> void:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = color
+	mat.roughness = 0.55
+	_apply_override(root, mat)
+
+
+static func _apply_override(root: Node, mat: Material) -> void:
+	for c in root.get_children():
+		if c is MeshInstance3D:
+			(c as MeshInstance3D).material_override = mat
+		_apply_override(c, mat)

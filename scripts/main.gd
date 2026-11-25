@@ -6,15 +6,27 @@ const PlayerScript := preload("res://scripts/player.gd")
 const DirtShader := preload("res://shaders/dirt.gdshader")
 const Models := preload("res://scripts/models.gd")
 
-# Çöp türleri: [dosya, boyut (m), değer, sıklık]
+# Çöp türleri: [dosya, boyut (m), değer, sıklık, renk (dokusu eksik olanlar için, yoksa null)]
 const TRASH_TYPES := [
-	["Lata", 0.32, 3, 3], ["CrushedBottle", 0.42, 3, 3], ["EmptyBottle", 0.5, 4, 2],
-	["FlatBottle", 0.45, 3, 2], ["TwistedBottle", 0.5, 4, 2], ["DwarfBottle", 0.38, 3, 2],
-	["NormalRed", 0.45, 3, 2], ["Platano", 0.38, 2, 2], ["RottenApple", 0.3, 2, 2],
-	["Sandwich", 0.4, 2, 1], ["Tissue1", 0.32, 1, 2], ["Tissue2", 0.32, 1, 2],
-	["StripedBox", 0.65, 5, 2], ["BolsaA", 0.85, 6, 1], ["BolsaN1", 0.85, 6, 1],
-	["BolsaN2", 0.85, 6, 1], ["BolsaNa", 0.85, 6, 1], ["Bag_Box", 1.1, 10, 1],
-	["Box_Bottles", 1.0, 9, 1],
+	["Lata", 0.5, 3, 3, Color(0.85, 0.15, 0.12)],
+	["CrushedBottle", 0.65, 3, 3, Color(0.25, 0.6, 0.35)],
+	["EmptyBottle", 0.75, 4, 2, Color(0.55, 0.8, 0.9)],
+	["FlatBottle", 0.7, 3, 2, Color(0.55, 0.32, 0.15)],
+	["TwistedBottle", 0.75, 4, 2, Color(0.3, 0.5, 0.9)],
+	["DwarfBottle", 0.6, 3, 2, Color(0.2, 0.45, 0.25)],
+	["NormalRed", 0.7, 3, 2, Color(0.8, 0.2, 0.2)],
+	["Platano", 0.6, 2, 2, Color(0.95, 0.8, 0.25)],
+	["RottenApple", 0.48, 2, 2, Color(0.55, 0.3, 0.15)],
+	["Sandwich", 0.6, 2, 1, Color(0.85, 0.7, 0.45)],
+	["Tissue1", 0.5, 1, 2, null],
+	["Tissue2", 0.5, 1, 2, null],
+	["StripedBox", 0.95, 5, 2, null],
+	["BolsaA", 1.2, 6, 1, null],
+	["BolsaN1", 1.2, 6, 1, null],
+	["BolsaN2", 1.2, 6, 1, null],
+	["BolsaNa", 1.2, 6, 1, null],
+	["Bag_Box", 1.5, 10, 1, null],
+	["Box_Bottles", 1.4, 9, 1, null],
 ]
 
 const AREA_SIZE := 40.0          # temizlenecek alanın kenarı (metre)
@@ -68,7 +80,7 @@ var completed := false
 # --- Sahne parçaları ---
 var player: PlayerScript
 var camera: Camera3D
-var cam_offset := Vector3(0, 17, 11)
+var cam_offset := Vector3(0, 12.5, 8.5)
 var env: Environment
 var sun: DirectionalLight3D
 var aim_ring: MeshInstance3D
@@ -163,7 +175,7 @@ func _build_environment() -> void:
 	env.ambient_light_energy = 0.9
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 	env.adjustment_enabled = true
-	env.adjustment_saturation = 0.55   # alan temizlendikçe artar
+	env.adjustment_saturation = 0.75   # alan temizlendikçe artar
 	we.environment = env
 	add_child(we)
 
@@ -397,7 +409,9 @@ func _spawn_trash(pos: Vector3) -> void:
 	model.name = "Mesh"
 	var dims: Vector3 = model.get_meta("dims")
 	model.position.y = -dims.y * 0.5
-	Models.set_shadows(model, size >= 0.7)
+	if t[4] != null:
+		Models.tint(model, t[4])
+	Models.set_shadows(model, size >= 0.9)
 	var cs := CollisionShape3D.new()
 	var bs := BoxShape3D.new()
 	bs.size = Vector3(maxf(dims.x, 0.12), maxf(dims.y, 0.08), maxf(dims.z, 0.12))
@@ -406,7 +420,7 @@ func _spawn_trash(pos: Vector3) -> void:
 	body.add_child(cs)
 	body.set_meta("value", int(t[2]))
 	body.position = pos + Vector3(0, dims.y * 0.5 + 0.3, 0)
-	if size < 0.7:
+	if size < 0.9:
 		body.rotation = Vector3(randf() * TAU, randf() * TAU, randf() * TAU)
 	else:
 		body.rotation = Vector3(0, randf() * TAU, 0)
@@ -834,7 +848,7 @@ func _sell() -> void:
 func _update_progress() -> void:
 	clean_pct = 100.0 * float(clean_pixel_count) / float(maxi(1, dirty_pixel_total))
 	var t := clampf(clean_pct / 100.0, 0.0, 1.0)
-	env.adjustment_saturation = lerpf(0.55, 1.15, t)
+	env.adjustment_saturation = lerpf(0.75, 1.15, t)
 	sun.light_energy = lerpf(0.85, 1.15, t)
 
 	if clean_pct >= float(next_milestone) and next_milestone < 100:
