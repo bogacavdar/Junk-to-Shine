@@ -1,14 +1,19 @@
 extends CharacterBody3D
-## Oyuncu: WASD ile yürür, görseli aletin baktığı yere döner.
+## Birinci şahıs oyuncu: fareyle bakar, WASD ile yürür (Shift: koş).
+## Elindeki alet kameraya bağlı, yürürken hafifçe sallanır.
 
-var speed := 7.5
-var visual: Node3D
+var walk_speed := 4.5
+var run_speed := 7.5
+var mouse_sensitivity := 0.0025
+var look_enabled := true
+
+var head: Node3D
+var camera: Camera3D
+var tool_root: Node3D
 var tool_nodes: Array[Node3D] = []
-var character: Node3D
-var anim: AnimationPlayer
-var cheering := false
 
-const Models := preload("res://scripts/models.gd")
+const TOOL_BASE := Vector3(0.3, -0.3, -0.55)
+var bob_time := 0.0
 
 
 func _ready() -> void:
@@ -17,112 +22,120 @@ func _ready() -> void:
 
 	var cs := CollisionShape3D.new()
 	var cap := CapsuleShape3D.new()
-	cap.radius = 0.4
-	cap.height = 1.6
+	cap.radius = 0.35
+	cap.height = 1.75
 	cs.shape = cap
-	cs.position.y = 0.8
+	cs.position.y = 0.875
 	add_child(cs)
 
-	visual = Node3D.new()
-	visual.name = "Visual"
-	add_child(visual)
+	head = Node3D.new()
+	head.position.y = 1.65
+	add_child(head)
+	camera = Camera3D.new()
+	camera.fov = 75.0
+	camera.near = 0.05
+	camera.far = 400.0
+	head.add_child(camera)
+	camera.current = true
 
-	# Karakter modeli: KayKit Rogue (silah ve pelerin gizli), +Z'ye baktığı için 180° çevrilir
-	character = Models.make("res://assets/character/Rogue.glb", 1.85, true)
-	character.rotation_degrees.y = 180.0
-	visual.add_child(character)
-	for part in ["Knife_Offhand", "1H_Crossbow", "2H_Crossbow", "Knife", "Throwable", "Rogue_Cape"]:
-		var n := character.find_child(part, true, false)
-		if n is Node3D:
-			(n as Node3D).visible = false
-	var ap := character.find_child("AnimationPlayer", true, false)
-	if ap is AnimationPlayer:
-		anim = ap as AnimationPlayer
-		for loop_name in ["Idle", "Running_A", "Walking_A"]:
-			if anim.has_animation(loop_name):
-				anim.get_animation(loop_name).loop_mode = Animation.LOOP_LINEAR
-		_play("Idle")
+	tool_root = Node3D.new()
+	tool_root.position = TOOL_BASE
+	camera.add_child(tool_root)
+	_build_tools()
 
-	# Sırt tankı
-	var tank := BoxMesh.new()
-	tank.size = Vector3(0.4, 0.5, 0.22)
-	tank.material = _mat(Color(1.0, 0.75, 0.1))
-	_add_mesh(tank, Vector3(0, 1.05, 0.32))
 
-	# Yıkama tabancası (ileri, -Z yönüne bakar)
-	var gun := CylinderMesh.new()
-	gun.top_radius = 0.05
-	gun.bottom_radius = 0.07
-	gun.height = 0.7
-	gun.radial_segments = 6
-	gun.material = _mat(Color(0.25, 0.25, 0.28))
-	var gun_mi := _add_mesh(gun, Vector3(0.32, 0.95, -0.4))
-	gun_mi.rotation_degrees = Vector3(-80, 0, 0)
-
-	# Süpürge: sap + fırça başı, öne ve yere doğru eğik
+func _build_tools() -> void:
+	# Süpürge: sap + fırça başı, öne ve aşağı eğik
 	var broom := Node3D.new()
-	broom.position = Vector3(0.35, 0.95, -0.3)
-	broom.rotation_degrees = Vector3(40, 0, 0)
-	visual.add_child(broom)
+	broom.rotation_degrees = Vector3(-35, 8, 0)
+	tool_root.add_child(broom)
 	var stick := CylinderMesh.new()
-	stick.top_radius = 0.03
-	stick.bottom_radius = 0.03
-	stick.height = 1.4
-	stick.radial_segments = 6
-	stick.material = _mat(Color(0.6, 0.42, 0.22))
-	_add_to(broom, stick, Vector3.ZERO)
+	stick.top_radius = 0.018
+	stick.bottom_radius = 0.018
+	stick.height = 1.3
+	stick.radial_segments = 10
+	stick.material = _mat(Color(0.55, 0.38, 0.2), 0.7)
+	_add_to(broom, stick, Vector3(0, -0.25, 0))
 	var head_mesh := BoxMesh.new()
-	head_mesh.size = Vector3(0.55, 0.12, 0.18)
-	head_mesh.material = _mat(Color(0.85, 0.7, 0.3))
-	_add_to(broom, head_mesh, Vector3(0, -0.7, 0))
+	head_mesh.size = Vector3(0.45, 0.08, 0.12)
+	head_mesh.material = _mat(Color(0.75, 0.6, 0.25), 0.9)
+	_add_to(broom, head_mesh, Vector3(0, -0.9, 0))
+
+	# Basınçlı yıkama tabancası
+	var gun := Node3D.new()
+	tool_root.add_child(gun)
+	var body := BoxMesh.new()
+	body.size = Vector3(0.07, 0.14, 0.22)
+	body.material = _mat(Color(0.9, 0.75, 0.1), 0.45)
+	_add_to(gun, body, Vector3(0, 0, 0))
+	var barrel := CylinderMesh.new()
+	barrel.top_radius = 0.016
+	barrel.bottom_radius = 0.02
+	barrel.height = 0.55
+	barrel.radial_segments = 12
+	barrel.material = _mat(Color(0.2, 0.2, 0.22), 0.3)
+	var barrel_mi := _add_to(gun, barrel, Vector3(0, 0.04, -0.35))
+	barrel_mi.rotation_degrees = Vector3(-90, 0, 0)
+	var grip := BoxMesh.new()
+	grip.size = Vector3(0.05, 0.14, 0.06)
+	grip.material = _mat(Color(0.15, 0.15, 0.16), 0.8)
+	var grip_mi := _add_to(gun, grip, Vector3(0, -0.1, 0.04))
+	grip_mi.rotation_degrees = Vector3(15, 0, 0)
 
 	# Elektrik süpürgesi: kalın hortum + geniş ağız
 	var vac := Node3D.new()
-	vac.position = Vector3(0.32, 0.85, -0.35)
-	vac.rotation_degrees = Vector3(50, 0, 0)
-	visual.add_child(vac)
+	vac.rotation_degrees = Vector3(-40, 5, 0)
+	tool_root.add_child(vac)
 	var tube := CylinderMesh.new()
-	tube.top_radius = 0.08
-	tube.bottom_radius = 0.08
-	tube.height = 1.1
-	tube.radial_segments = 8
-	tube.material = _mat(Color(0.55, 0.35, 0.75))
-	_add_to(vac, tube, Vector3.ZERO)
+	tube.top_radius = 0.045
+	tube.bottom_radius = 0.045
+	tube.height = 1.0
+	tube.radial_segments = 14
+	tube.material = _mat(Color(0.45, 0.3, 0.65), 0.5)
+	_add_to(vac, tube, Vector3(0, -0.2, 0))
 	var mouth := BoxMesh.new()
-	mouth.size = Vector3(0.45, 0.1, 0.22)
-	mouth.material = _mat(Color(0.25, 0.25, 0.28))
-	_add_to(vac, mouth, Vector3(0, -0.55, 0))
+	mouth.size = Vector3(0.35, 0.07, 0.16)
+	mouth.material = _mat(Color(0.2, 0.2, 0.22), 0.6)
+	_add_to(vac, mouth, Vector3(0, -0.72, 0))
 
-	tool_nodes = [broom, gun_mi, vac]
+	tool_nodes = [broom, gun, vac]
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if not look_enabled or Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
+		return
+	if event is InputEventMouseMotion:
+		var motion := event as InputEventMouseMotion
+		rotate_y(-motion.relative.x * mouse_sensitivity)
+		head.rotation.x = clampf(head.rotation.x - motion.relative.y * mouse_sensitivity, deg_to_rad(-85.0), deg_to_rad(80.0))
 
 
 func _physics_process(delta: float) -> void:
 	var input := Input.get_vector("move_left", "move_right", "move_up", "move_down")
-	velocity.x = input.x * speed
-	velocity.z = input.y * speed
+	var dir := Vector3.ZERO
+	if input.length() > 0.05:
+		dir = (transform.basis * Vector3(input.x, 0, input.y)).normalized()
+	var running := Input.is_key_pressed(KEY_SHIFT)
+	var spd := run_speed if running else walk_speed
+	velocity.x = dir.x * spd
+	velocity.z = dir.z * spd
 	if is_on_floor():
 		velocity.y = -0.5
 	else:
 		velocity.y -= 25.0 * delta
 	move_and_slide()
-	if not cheering:
-		_play("Running_A" if input.length() > 0.1 else "Idle")
+
+	# Yürürken kafa ve alet sallanması
+	if dir != Vector3.ZERO and is_on_floor():
+		bob_time += delta * spd * 1.7
+	else:
+		bob_time = lerpf(bob_time, roundf(bob_time / PI) * PI, clampf(delta * 6.0, 0.0, 1.0))
+	camera.position.y = sin(bob_time) * 0.035
+	tool_root.position = TOOL_BASE + Vector3(cos(bob_time * 0.5) * 0.012, sin(bob_time) * 0.018, 0)
 
 
-func _play(anim_name: String) -> void:
-	if anim == null or not anim.has_animation(anim_name):
-		return
-	if anim.current_animation != anim_name:
-		anim.play(anim_name, 0.15)
-
-
-func cheer() -> void:
-	if anim == null or not anim.has_animation("Cheer"):
-		return
-	cheering = true
-	anim.play("Cheer", 0.15)
-	await anim.animation_finished
-	cheering = false
+func nozzle_position() -> Vector3:
+	return tool_root.global_position - camera.global_basis.z * 0.6 + camera.global_basis.y * 0.04
 
 
 func set_tool(t: int) -> void:
@@ -130,29 +143,21 @@ func set_tool(t: int) -> void:
 		tool_nodes[i].visible = (i == t)
 
 
-func face(point: Vector3) -> void:
-	var flat := Vector3(point.x, visual.global_position.y, point.z)
-	if flat.distance_to(visual.global_position) > 0.2:
-		visual.look_at(flat, Vector3.UP)
+func cheer() -> void:
+	pass
 
 
-func _add_mesh(mesh: Mesh, pos: Vector3) -> MeshInstance3D:
+func _add_to(parent: Node3D, mesh: Mesh, pos: Vector3) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	mi.mesh = mesh
 	mi.position = pos
-	visual.add_child(mi)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(mi)
 	return mi
 
 
-func _add_to(parent: Node3D, mesh: Mesh, pos: Vector3) -> void:
-	var mi := MeshInstance3D.new()
-	mi.mesh = mesh
-	mi.position = pos
-	parent.add_child(mi)
-
-
-func _mat(c: Color) -> StandardMaterial3D:
+func _mat(c: Color, rough: float) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	m.albedo_color = c
-	m.roughness = 0.8
+	m.roughness = rough
 	return m

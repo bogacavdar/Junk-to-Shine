@@ -128,6 +128,11 @@ var shop_label: Label
 var info_label: Label
 var banner_label: Label
 var shop_panel: PanelContainer
+var crosshair: Label
+var prompt_label: Label
+var near_shop := false
+var shop_open := false
+var water_stream: MeshInstance3D
 var shop_buttons: Array[Button] = []
 
 
@@ -184,14 +189,13 @@ func _build_environment() -> void:
 	env = Environment.new()
 	env.background_mode = Environment.BG_SKY
 	var sky := Sky.new()
-	var sky_mat := ProceduralSkyMaterial.new()
-	sky_mat.sky_top_color = Color(0.32, 0.52, 0.85)
-	sky_mat.sky_horizon_color = Color(0.75, 0.82, 0.9)
-	sky_mat.ground_horizon_color = Color(0.6, 0.62, 0.6)
+	var sky_mat := PanoramaSkyMaterial.new()
+	sky_mat.panorama = load("res://assets/textures/sky_garden.hdr")
 	sky.sky_material = sky_mat
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_energy = 0.9
+	env.ambient_light_energy = 1.0
+	env.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
 	env.tonemap_mode = Environment.TONE_MAPPER_ACES
 	env.ssao_enabled = true
 	env.ssao_radius = 1.2
@@ -202,7 +206,7 @@ func _build_environment() -> void:
 	env.fog_density = 0.004
 	env.fog_light_color = Color(0.75, 0.8, 0.85)
 	env.adjustment_enabled = true
-	env.adjustment_saturation = 0.75   # alan temizlendikçe artar
+	env.adjustment_saturation = 0.85   # alan temizlendikçe artar
 	we.environment = env
 	add_child(we)
 
@@ -211,7 +215,7 @@ func _build_environment() -> void:
 	sun.shadow_enabled = true
 	sun.light_angular_distance = 1.5
 	sun.shadow_blur = 1.5
-	sun.light_energy = 0.85
+	sun.light_energy = 1.1
 	sun.light_color = Color(1.0, 0.92, 0.82)
 	add_child(sun)
 
@@ -245,6 +249,15 @@ func _build_ground() -> void:
 	ground_material.shader = DirtShader
 	ground_material.set_shader_parameter("dirt_mask", mask_texture)
 	ground_material.set_shader_parameter("area_size", AREA_SIZE)
+	var tex := "res://assets/textures/"
+	ground_material.set_shader_parameter("clean_albedo", load(tex + "square_concrete_pavers_diff.jpg"))
+	ground_material.set_shader_parameter("clean_normal", load(tex + "square_concrete_pavers_nor.jpg"))
+	ground_material.set_shader_parameter("clean_rough", load(tex + "square_concrete_pavers_rough.png"))
+	ground_material.set_shader_parameter("mud_albedo", load(tex + "brown_mud_leaves_01_diff.jpg"))
+	ground_material.set_shader_parameter("mud_normal", load(tex + "brown_mud_leaves_01_nor.jpg"))
+	ground_material.set_shader_parameter("soil_albedo", load(tex + "dirt_floor_diff.jpg"))
+	ground_material.set_shader_parameter("soil_normal", load(tex + "dirt_floor_nor.jpg"))
+	ground_material.set_shader_parameter("soil_rough", load(tex + "dirt_floor_rough.png"))
 
 	var ground := MeshInstance3D.new()
 	var pm := PlaneMesh.new()
@@ -396,11 +409,9 @@ func _build_player() -> void:
 	player.position = Vector3(0, 0.1, AREA_SIZE * 0.5 - 5)
 	add_child(player)
 
-	camera = Camera3D.new()
-	camera.fov = 50
-	add_child(camera)
-	camera.global_position = player.global_position + cam_offset
-	camera.look_at(player.global_position + Vector3(0, 0.5, 0), Vector3.UP)
+	player.rotation.y = 0.0
+	camera = player.camera
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
 func _spawn_all_trash() -> void:
@@ -590,11 +601,11 @@ func _build_hud() -> void:
 
 	shop_label = _make_label(layer, Vector2(990, 14), 20, Color.WHITE)
 	info_label = _make_label(layer, Vector2(24, 676), 18, Color(1, 1, 1, 0.85))
-	info_label.text = "WASD: yürü   ·   Sol tık basılı: aleti kullan   ·   1 / 2 / 3 veya tekerlek: alet değiştir   ·   Konteyner: sat ve dükkân   ·   ESC: menü"
+	info_label.text = "WASD: yürü   ·   Fare: bak   ·   Shift: koş   ·   Sol tık basılı: aleti kullan   ·   1 / 2 / 3 veya tekerlek: alet değiştir   ·   Konteyner: sat, E: dükkân   ·   ESC: menü"
 
 	# Dükkân paneli: konteynerin yanına gelince açılır
 	shop_panel = PanelContainer.new()
-	shop_panel.position = Vector2(850, 240)
+	shop_panel.position = Vector2(440, 200)
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color(0.07, 0.11, 0.09, 0.9)
 	sb.set_corner_radius_all(10)
@@ -619,6 +630,16 @@ func _build_hud() -> void:
 	shop_panel.visible = false
 	layer.add_child(shop_panel)
 
+	crosshair = _make_label(layer, Vector2(630, 342), 26, Color(1, 1, 1, 0.9))
+	crosshair.text = "+"
+	crosshair.size = Vector2(20, 36)
+	crosshair.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	prompt_label = _make_label(layer, Vector2(0, 430), 26, Color(0.7, 1.0, 0.8))
+	prompt_label.size = Vector2(1280, 40)
+	prompt_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	prompt_label.text = "E: Dükkânı aç"
+	prompt_label.visible = false
+
 	banner_label = _make_label(layer, Vector2(0, 250), 64, Color(0.6, 1.0, 0.75))
 	banner_label.size = Vector2(1280, 100)
 	banner_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -636,37 +657,34 @@ func _process(delta: float) -> void:
 	if autosave_timer > 20.0:
 		autosave_timer = 0.0
 		_save_game()
-	# Kamera takibi
-	var target := player.global_position + cam_offset
-	camera.global_position = camera.global_position.lerp(target, clampf(5.0 * delta, 0.0, 1.0))
-
-	# Nişan noktası
-	var aim := player.global_position
-	var hit: Variant = _mouse_ground_point()
+	# Nişan: ekranın ortasındaki nişangâhın baktığı yer (erişim mesafesi içindeyse)
+	var aim := Vector3.ZERO
+	var aim_valid := false
+	var hit: Variant = _aim_ground_point()
 	if hit != null:
 		var h: Vector3 = hit
-		var off := Vector3(h.x - player.global_position.x, 0, h.z - player.global_position.z)
-		if off.length() > REACH:
-			off = off.normalized() * REACH
-		aim = player.global_position + off
-		var lim := AREA_SIZE * 0.5 - 0.3
-		aim.x = clampf(aim.x, -lim, lim)
-		aim.z = clampf(aim.z, -lim, lim)
-		aim.y = 0.0
-	player.face(aim)
+		var lim := AREA_SIZE * 0.5 - 0.2
+		if Vector3(h.x - player.global_position.x, 0, h.z - player.global_position.z).length() <= REACH and absf(h.x) < lim and absf(h.z) < lim:
+			aim = Vector3(h.x, 0.0, h.z)
+			aim_valid = true
 
 	var r := tool_radius()
+	aim_ring.visible = aim_valid
 	aim_ring.global_position = aim + Vector3(0, 0.03, 0)
 	aim_ring.scale = Vector3(r, 1, r)
 
-	# Konteyner: satış + dükkân
+	# Konteyner: satış + dükkân (E)
 	var to_container := Vector2(player.global_position.x - container_pos.x, player.global_position.z - container_pos.z).length()
 	if bag > 0 and to_container < 3.2:
 		_sell()
-	shop_panel.visible = to_container < 4.5
+	near_shop = to_container < 4.5
+	if shop_open and not near_shop:
+		_set_shop_open(false)
+	shop_panel.visible = shop_open
+	prompt_label.visible = near_shop and not shop_open
+	crosshair.visible = not shop_open
 
-	var mouse_on_ui := shop_panel.visible and shop_panel.get_global_rect().has_point(get_viewport().get_mouse_position())
-	var using := Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) and not completed and not mouse_on_ui
+	var using := Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) and not completed and not shop_open and aim_valid and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
 	vacuum_active = false
 	if using:
 		match current_tool:
@@ -680,6 +698,7 @@ func _process(delta: float) -> void:
 	spray.global_position = aim + Vector3(0, 0.1, 0)
 	spray.emission_sphere_radius = r * (0.9 if current_tool == TOOL_VACUUM else 0.6)
 	spray.emitting = using
+	_update_water_stream(using and current_tool == TOOL_WASHER, aim)
 	if using:
 		if not spray_player.playing:
 			spray_player.play()
@@ -740,9 +759,22 @@ func _physics_process(_delta: float) -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_ESCAPE:
-		_toggle_pause()
+		if shop_open:
+			_set_shop_open(false)
+		else:
+			_toggle_pause()
 		return
 	if paused:
+		return
+	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_E:
+		if shop_open:
+			_set_shop_open(false)
+		elif near_shop:
+			_set_shop_open(true)
+		return
+	# Fare bırakıldıysa tıklayınca yeniden yakala
+	if event is InputEventMouseButton and event.pressed and not shop_open and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.physical_keycode:
@@ -900,8 +932,8 @@ func _sell() -> void:
 func _update_progress() -> void:
 	clean_pct = 100.0 * float(clean_pixel_count) / float(maxi(1, dirty_pixel_total))
 	var t := clampf(clean_pct / 100.0, 0.0, 1.0)
-	env.adjustment_saturation = lerpf(0.75, 1.15, t)
-	sun.light_energy = lerpf(0.85, 1.15, t)
+	env.adjustment_saturation = lerpf(0.85, 1.08, t)
+	sun.light_energy = lerpf(1.0, 1.2, t)
 
 	if clean_pct >= float(next_milestone) and next_milestone < 100:
 		_float_text(player.global_position + Vector3(0, 2.6, 0), "%%%d temiz!" % next_milestone, Color(0.6, 1.0, 0.8))
@@ -1059,8 +1091,8 @@ func _update_hud() -> void:
 # YARDIMCILAR
 # =====================================================================
 
-func _mouse_ground_point() -> Variant:
-	var mp := get_viewport().get_mouse_position()
+func _aim_ground_point() -> Variant:
+	var mp := get_viewport().get_visible_rect().size * 0.5
 	var from := camera.project_ray_origin(mp)
 	var dir := camera.project_ray_normal(mp)
 	var plane := Plane(Vector3.UP, 0.0)
@@ -1277,6 +1309,7 @@ func _save_game() -> void:
 		"trash": trash,
 		"finds": found_finds,
 		"player": [player.global_position.x, player.global_position.z],
+		"yaw": player.rotation.y,
 		"volume": master_volume,
 	}
 	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
@@ -1327,7 +1360,7 @@ func _apply_save(d: Dictionary) -> void:
 	var pp: Array = d.get("player", [])
 	if pp.size() == 2:
 		player.position = Vector3(pp[0], 0.1, pp[1])
-		camera.global_position = player.position + cam_offset
+		player.rotation.y = float(d.get("yaw", 0.0))
 
 	if completed:
 		for f: Node3D in flower_nodes:
@@ -1404,6 +1437,9 @@ func _toggle_pause() -> void:
 	paused = not paused
 	pause_panel.visible = paused
 	player.set_physics_process(not paused)
+	player.look_enabled = not paused
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if paused else Input.MOUSE_MODE_CAPTURED
+	_update_water_stream(false, Vector3.ZERO)
 	spray.emitting = false
 	if spray_player.playing:
 		spray_player.stop()
@@ -1438,3 +1474,49 @@ func _new_game() -> void:
 func _save_and_quit() -> void:
 	_save_game()
 	get_tree().quit()
+
+
+# =====================================================================
+# BİRİNCİ ŞAHIS YARDIMCILARI
+# =====================================================================
+
+func _set_shop_open(open: bool) -> void:
+	shop_open = open
+	shop_panel.visible = open
+	player.look_enabled = not open
+	player.set_physics_process(not open)
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if open else Input.MOUSE_MODE_CAPTURED
+	if open:
+		_update_water_stream(false, Vector3.ZERO)
+
+
+## Yıkama tabancasından nişan noktasına uzanan su hüzmesi
+func _update_water_stream(active: bool, target: Vector3) -> void:
+	if water_stream == null:
+		water_stream = MeshInstance3D.new()
+		var cyl := CylinderMesh.new()
+		cyl.top_radius = 0.012
+		cyl.bottom_radius = 0.035
+		cyl.height = 1.0
+		cyl.radial_segments = 8
+		var m := StandardMaterial3D.new()
+		m.albedo_color = Color(0.8, 0.92, 1.0, 0.45)
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		cyl.material = m
+		water_stream.mesh = cyl
+		water_stream.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(water_stream)
+	water_stream.visible = active
+	if not active:
+		return
+	var from := player.nozzle_position()
+	var to := target + Vector3(0, 0.05, 0)
+	var dir := to - from
+	var length := dir.length()
+	if length < 0.05:
+		water_stream.visible = false
+		return
+	var up := Vector3.UP if absf(dir.normalized().y) < 0.99 else Vector3.FORWARD
+	var b := Basis.looking_at(dir.normalized(), up) * Basis(Vector3.RIGHT, -PI * 0.5) * Basis.from_scale(Vector3(1, length, 1))
+	water_stream.global_transform = Transform3D(b, (from + to) * 0.5)

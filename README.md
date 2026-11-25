@@ -5,10 +5,11 @@ Felaket durumdaki alanları temizleyip çöpten para kazandığın, aletlerini y
 **Son Windows sürümünü indir:** https://github.com/bogacavdar/Junk-to-Shine/releases/latest/download/JunkToShine-Windows.zip
 
 ## Kontroller
-- **WASD / ok tuşları:** yürü
-- **Sol tık basılı:** seçili aleti kullan (süpürge yaprak toplar, yıkayıcı kiri siler, elektrik süpürgesi çöp çeker)
+- **Fare:** etrafa bak (birinci şahıs)
+- **WASD / ok tuşları:** yürü, **Shift:** koş
+- **Sol tık basılı:** nişangâhın baktığı yerde seçili aleti kullan (süpürge yaprak toplar, yıkayıcı kiri siler, elektrik süpürgesi çöp çeker)
 - **Çöplerin üstünden geç:** topla
-- **Yeşil SAT konteyneri:** çantayı sat, yanında açılan dükkândan yükseltme al
+- **Yeşil SAT konteyneri:** yanına gelince çanta satılır, **E** ile dükkânı aç
 - **1 / 2 / 3 veya fare tekerleği:** süpürge, yıkayıcı, elektrik süpürgesi
 - **ESC:** menü (devam, tam ekran, ses, yeni oyun, kaydet ve çık)
 
