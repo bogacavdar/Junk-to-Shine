@@ -39,5 +39,5 @@ void fragment() {
 	ALBEDO = mix(clean, dirt, t);
 	ROUGHNESS = mix(0.3, 1.0, t);
 	SPECULAR = mix(0.65, 0.2, t);
-	EMISSION = vec3(1.0, 0.55, 0.1) * t * hint * (0.5 + 0.5 * sin(TIME * 5.0)) * 0.4;
+	EMISSION = vec3(1.0, 0.55, 0.1) * t * hint * (0.35 + 0.65 * (0.5 + 0.5 * sin(TIME * 4.0))) * 1.1;
 }

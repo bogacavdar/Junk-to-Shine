@@ -12,7 +12,7 @@ const PIXELS_PER_COIN := 25      # kaç temiz piksel = 1 para
 const REACH := 5.0               # aletin oyuncudan en uzak erişimi
 const TRASH_COUNT := 70
 const LEAF_COUNT := 1400
-const COMPLETE_PCT := 95.0
+const COMPLETE_PCT := 99.0       # bu orandan sonra kalan kırıntılar otomatik temizlenir
 const COMPLETE_BONUS := 250
 
 # --- Yükseltme fiyatları (bir sonraki seviyenin fiyatı) ---
@@ -74,6 +74,7 @@ var tick_cooldown := 0.0
 var money_label: Label
 var bag_label: Label
 var pct_label: Label
+var count_label: Label
 var progress_bar: ProgressBar
 var shop_label: Label
 var info_label: Label
@@ -471,8 +472,8 @@ func _build_hud() -> void:
 	bag_label = _make_label(layer, Vector2(24, 62), 24, Color.WHITE)
 
 	progress_bar = ProgressBar.new()
-	progress_bar.position = Vector2(440, 22)
-	progress_bar.size = Vector2(400, 26)
+	progress_bar.position = Vector2(400, 22)
+	progress_bar.size = Vector2(440, 26)
 	progress_bar.max_value = 100.0
 	progress_bar.show_percentage = false
 	var fill := StyleBoxFlat.new()
@@ -484,11 +485,14 @@ func _build_hud() -> void:
 	progress_bar.add_theme_stylebox_override("fill", fill)
 	progress_bar.add_theme_stylebox_override("background", bg)
 	layer.add_child(progress_bar)
-	pct_label = _make_label(layer, Vector2(440, 50), 20, Color.WHITE)
-	pct_label.size = Vector2(400, 30)
+	pct_label = _make_label(layer, Vector2(400, 50), 20, Color.WHITE)
+	pct_label.size = Vector2(440, 30)
 	pct_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	count_label = _make_label(layer, Vector2(400, 76), 17, Color(1, 1, 1, 0.85))
+	count_label.size = Vector2(440, 26)
+	count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 
-	shop_label = _make_label(layer, Vector2(930, 14), 20, Color.WHITE)
+	shop_label = _make_label(layer, Vector2(970, 14), 20, Color.WHITE)
 	info_label = _make_label(layer, Vector2(24, 676), 18, Color(1, 1, 1, 0.85))
 	info_label.text = "WASD: yürü   ·   Sol tık basılı: yıka   ·   Çöplerin üstünden geç: topla   ·   Konteyner: sat   ·   1 / 2 / 3: yükselt"
 
@@ -684,17 +688,40 @@ func _update_progress() -> void:
 		_play_blip(coin_stream, 0.8, -4.0)
 		next_milestone += 25
 
-	# %85'ten sonra kalan lekeler hafifçe parlar
-	ground_material.set_shader_parameter("hint", 1.0 if clean_pct >= 85.0 and not completed else 0.0)
+	# %90'dan sonra kalan lekeler belirgin şekilde parlar
+	ground_material.set_shader_parameter("hint", 1.0 if clean_pct >= 90.0 and not completed else 0.0)
 
 	if not completed and clean_pct >= COMPLETE_PCT and trash_bodies.is_empty():
 		completed = true
+		_sweep_leftovers()
 		money += COMPLETE_BONUS
 		banner_label.text = "ALAN TERTEMİZ!  +%d" % COMPLETE_BONUS
 		banner_label.visible = true
 		spray.emitting = false
 		for i in 8:
 			get_tree().create_timer(0.08 * i).timeout.connect(_play_blip.bind(coin_stream, 0.8 + i * 0.1, -4.0))
+
+
+func _sweep_leftovers() -> void:
+	# Son kırıntılar: kalan kir 5 adımda parlayarak silinir, kalan yapraklar kaybolur
+	for i in LEAF_COUNT:
+		if leaf_alive[i] == 1:
+			leaf_alive[i] = 0
+			leaf_mm.multimesh.set_instance_transform(i, Transform3D(Basis().scaled(Vector3.ONE * 0.001), Vector3(0, -2, 0)))
+	leaves_left = 0
+	for step in 5:
+		get_tree().create_timer(0.15 * (step + 1)).timeout.connect(_fade_mask_step.bind(step == 4))
+
+
+func _fade_mask_step(final: bool) -> void:
+	for i in mask_data.size():
+		var v: int = mask_data[i]
+		if v > 0:
+			mask_data[i] = 0 if final else v / 2
+	mask_image.set_data(MASK_RES, MASK_RES, false, Image.FORMAT_L8, mask_data)
+	mask_texture.update(mask_image)
+	if final:
+		clean_pixel_count = dirty_pixel_total
 
 
 # =====================================================================
@@ -770,8 +797,9 @@ func _update_hud() -> void:
 		bag_text += "   ·  DOLU! Konteynere götür"
 	bag_label.text = bag_text
 	progress_bar.value = clean_pct
-	pct_label.text = "Zemin %%%d temiz   ·   Kalan çöp: %d   ·   Kalan yaprak: %d" % [int(clean_pct), trash_bodies.size(), leaves_left]
-	shop_label.text = "YÜKSELTMELER\n[1] Fırça  Sv %d  →  %s\n[2] Çanta  %d  →  %s\n[3] Vakum  Sv %d  →  %s" % [
+	pct_label.text = "Zemin %%%d temiz" % int(clean_pct)
+	count_label.text = "Kalan çöp: %d   ·   Kalan yaprak: %d" % [trash_bodies.size(), leaves_left]
+	shop_label.text = "YÜKSELTMELER\n[1] Fırça  Sv %d  ·  %s\n[2] Çanta  %d  ·  %s\n[3] Vakum  Sv %d  ·  %s" % [
 		brush_level, _price_text(BRUSH_PRICES, brush_level - 1),
 		cap, _price_text(BAG_PRICES, bag_level - 1),
 		vacuum_level, _price_text(VACUUM_PRICES, vacuum_level),
