@@ -3,6 +3,7 @@ extends CharacterBody3D
 
 var speed := 7.5
 var visual: Node3D
+var tool_nodes: Array[Node3D] = []
 
 
 func _ready() -> void:
@@ -64,6 +65,42 @@ func _ready() -> void:
 	var gun_mi := _add_mesh(gun, Vector3(0.32, 0.95, -0.4))
 	gun_mi.rotation_degrees = Vector3(-80, 0, 0)
 
+	# Süpürge: sap + fırça başı, öne ve yere doğru eğik
+	var broom := Node3D.new()
+	broom.position = Vector3(0.35, 0.95, -0.3)
+	broom.rotation_degrees = Vector3(40, 0, 0)
+	visual.add_child(broom)
+	var stick := CylinderMesh.new()
+	stick.top_radius = 0.03
+	stick.bottom_radius = 0.03
+	stick.height = 1.4
+	stick.radial_segments = 6
+	stick.material = _mat(Color(0.6, 0.42, 0.22))
+	_add_to(broom, stick, Vector3.ZERO)
+	var head_mesh := BoxMesh.new()
+	head_mesh.size = Vector3(0.55, 0.12, 0.18)
+	head_mesh.material = _mat(Color(0.85, 0.7, 0.3))
+	_add_to(broom, head_mesh, Vector3(0, -0.7, 0))
+
+	# Elektrik süpürgesi: kalın hortum + geniş ağız
+	var vac := Node3D.new()
+	vac.position = Vector3(0.32, 0.85, -0.35)
+	vac.rotation_degrees = Vector3(50, 0, 0)
+	visual.add_child(vac)
+	var tube := CylinderMesh.new()
+	tube.top_radius = 0.08
+	tube.bottom_radius = 0.08
+	tube.height = 1.1
+	tube.radial_segments = 8
+	tube.material = _mat(Color(0.55, 0.35, 0.75))
+	_add_to(vac, tube, Vector3.ZERO)
+	var mouth := BoxMesh.new()
+	mouth.size = Vector3(0.45, 0.1, 0.22)
+	mouth.material = _mat(Color(0.25, 0.25, 0.28))
+	_add_to(vac, mouth, Vector3(0, -0.55, 0))
+
+	tool_nodes = [broom, gun_mi, vac]
+
 
 func _physics_process(delta: float) -> void:
 	var input := Input.get_vector("move_left", "move_right", "move_up", "move_down")
@@ -74,6 +111,11 @@ func _physics_process(delta: float) -> void:
 	else:
 		velocity.y -= 25.0 * delta
 	move_and_slide()
+
+
+func set_tool(t: int) -> void:
+	for i in tool_nodes.size():
+		tool_nodes[i].visible = (i == t)
 
 
 func face(point: Vector3) -> void:
@@ -88,6 +130,13 @@ func _add_mesh(mesh: Mesh, pos: Vector3) -> MeshInstance3D:
 	mi.position = pos
 	visual.add_child(mi)
 	return mi
+
+
+func _add_to(parent: Node3D, mesh: Mesh, pos: Vector3) -> void:
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	mi.position = pos
+	parent.add_child(mi)
 
 
 func _mat(c: Color) -> StandardMaterial3D:

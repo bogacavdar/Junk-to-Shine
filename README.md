@@ -6,10 +6,10 @@ Felaket durumdaki alanları temizleyip çöpten para kazandığın, aletlerini y
 
 ## Kontroller
 - **WASD / ok tuşları:** yürü
-- **Sol tık basılı:** fare nereyi gösteriyorsa orayı yıka
+- **Sol tık basılı:** seçili aleti kullan (süpürge yaprak toplar, yıkayıcı kiri siler, elektrik süpürgesi çöp çeker)
 - **Çöplerin üstünden geç:** topla
-- **Yeşil SAT konteyneri:** çantayı sat
-- **1 / 2 / 3:** fırça, çanta, vakum yükseltmesi
+- **Yeşil SAT konteyneri:** çantayı sat, yanında açılan dükkândan yükseltme al
+- **1 / 2 / 3 veya fare tekerleği:** süpürge, yıkayıcı, elektrik süpürgesi
 
 ## Geliştirme
 Godot 4.3+ ile `project.godot` dosyasını aç, F5 ile çalıştır.

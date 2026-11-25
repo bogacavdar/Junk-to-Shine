@@ -16,13 +16,24 @@ const COMPLETE_PCT := 99.0       # bu orandan sonra kalan kırıntılar otomatik
 const COMPLETE_BONUS := 250
 
 # --- Yükseltme fiyatları (bir sonraki seviyenin fiyatı) ---
-const BRUSH_PRICES := [40, 120, 300, 700]     # seviye 2..5
-const BAG_PRICES := [30, 90, 250, 600]        # seviye 2..5
-const VACUUM_PRICES := [60, 180, 450]         # seviye 1..3
+const WASHER_PRICES := [40, 120, 300, 700]    # yıkayıcı seviye 2..5
+const BROOM_PRICES := [25, 80, 200]           # süpürge seviye 2..4
+const VACUUM_PRICES := [80, 200, 500]         # elektrik süpürgesi seviye 1..3 (1 = kilidi açar)
+const BAG_PRICES := [30, 90, 250, 600]        # çanta seviye 2..5
+const WALK_PICKUP := 1.3                      # üstünden geçince toplama mesafesi
 
-var brush_level := 1
-var bag_level := 1
+# --- Aletler ---
+const TOOL_BROOM := 0
+const TOOL_WASHER := 1
+const TOOL_VACUUM := 2
+
+var current_tool := TOOL_WASHER
+var washer_level := 1
+var broom_level := 1
 var vacuum_level := 0
+var bag_level := 1
+var vacuum_active := false
+var vacuum_point := Vector3.ZERO
 
 # --- Ekonomi ---
 var money := 0
@@ -50,6 +61,8 @@ var env: Environment
 var sun: DirectionalLight3D
 var aim_ring: MeshInstance3D
 var spray: CPUParticles3D
+var spray_mat: StandardMaterial3D
+var ring_mat: StandardMaterial3D
 var container_pos := Vector3(-AREA_SIZE * 0.5 + 3.5, 0, AREA_SIZE * 0.5 - 3.5)
 var trash_bodies: Array[RigidBody3D] = []
 var tree_positions: Array[Vector3] = []
@@ -66,6 +79,7 @@ var coin_stream: AudioStreamWAV
 var blip_players: Array[AudioStreamPlayer] = []
 var blip_index := 0
 var spray_player: AudioStreamPlayer
+var tool_streams: Array[AudioStreamWAV] = []
 var combo := 0
 var combo_timer := 0.0
 var tick_cooldown := 0.0
@@ -79,6 +93,8 @@ var progress_bar: ProgressBar
 var shop_label: Label
 var info_label: Label
 var banner_label: Label
+var shop_panel: PanelContainer
+var shop_buttons: Array[Button] = []
 
 
 func _ready() -> void:
@@ -94,6 +110,7 @@ func _ready() -> void:
 	_build_tool_visuals()
 	_build_audio()
 	_build_hud()
+	_apply_tool_fx()
 	_update_hud()
 
 
@@ -412,22 +429,22 @@ func _build_leaves() -> void:
 
 
 func _build_tool_visuals() -> void:
-	# Hedef halkası
+	# Hedef halkası (rengi alete göre değişir)
 	aim_ring = MeshInstance3D.new()
 	var disk := CylinderMesh.new()
 	disk.top_radius = 1.0
 	disk.bottom_radius = 1.0
 	disk.height = 0.02
 	disk.radial_segments = 24
-	var rm := StandardMaterial3D.new()
-	rm.albedo_color = Color(0.6, 0.9, 1.0, 0.25)
-	rm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	rm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	disk.material = rm
+	ring_mat = StandardMaterial3D.new()
+	ring_mat.albedo_color = Color(0.6, 0.9, 1.0, 0.25)
+	ring_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	ring_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	disk.material = ring_mat
 	aim_ring.mesh = disk
 	add_child(aim_ring)
 
-	# Su sıçraması
+	# Alet parçacıkları (su, toz ya da emilen kırıntı)
 	spray = CPUParticles3D.new()
 	spray.emitting = false
 	spray.amount = 60
@@ -437,15 +454,11 @@ func _build_tool_visuals() -> void:
 	drop.height = 0.1
 	drop.radial_segments = 4
 	drop.rings = 2
-	var dm := StandardMaterial3D.new()
-	dm.albedo_color = Color(0.7, 0.9, 1.0)
-	dm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	drop.material = dm
+	spray_mat = StandardMaterial3D.new()
+	spray_mat.albedo_color = Color(0.7, 0.9, 1.0)
+	spray_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	drop.material = spray_mat
 	spray.mesh = drop
-	spray.direction = Vector3.UP
-	spray.spread = 55.0
-	spray.initial_velocity_min = 2.0
-	spray.initial_velocity_max = 4.5
 	spray.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
 	spray.emission_sphere_radius = 0.5
 	add_child(spray)
@@ -459,9 +472,11 @@ func _build_audio() -> void:
 		ap.volume_db = -8.0
 		add_child(ap)
 		blip_players.append(ap)
+	# Her aletin kendi döngü sesi: süpürge hışırtısı, su, motor uğultusu
+	tool_streams.append(_make_noise_loop(1.0, 0.08, 0.0))
+	tool_streams.append(_make_noise_loop(1.0, 0.35, 0.0))
+	tool_streams.append(_make_noise_loop(1.0, 0.15, 110.0))
 	spray_player = AudioStreamPlayer.new()
-	spray_player.stream = _make_noise_loop(1.0)
-	spray_player.volume_db = -18.0
 	add_child(spray_player)
 
 
@@ -492,9 +507,36 @@ func _build_hud() -> void:
 	count_label.size = Vector2(440, 26)
 	count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 
-	shop_label = _make_label(layer, Vector2(970, 14), 20, Color.WHITE)
+	shop_label = _make_label(layer, Vector2(990, 14), 20, Color.WHITE)
 	info_label = _make_label(layer, Vector2(24, 676), 18, Color(1, 1, 1, 0.85))
-	info_label.text = "WASD: yürü   ·   Sol tık basılı: yıka   ·   Çöplerin üstünden geç: topla   ·   Konteyner: sat   ·   1 / 2 / 3: yükselt"
+	info_label.text = "WASD: yürü   ·   Sol tık basılı: aleti kullan   ·   1 / 2 / 3 veya tekerlek: alet değiştir   ·   Yeşil konteyner: sat ve dükkân"
+
+	# Dükkân paneli: konteynerin yanına gelince açılır
+	shop_panel = PanelContainer.new()
+	shop_panel.position = Vector2(850, 240)
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.07, 0.11, 0.09, 0.9)
+	sb.set_corner_radius_all(10)
+	sb.set_content_margin_all(14)
+	shop_panel.add_theme_stylebox_override("panel", sb)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 8)
+	shop_panel.add_child(vb)
+	var title := Label.new()
+	title.text = "DÜKKÂN"
+	title.add_theme_font_size_override("font_size", 24)
+	title.add_theme_color_override("font_color", Color(0.6, 1.0, 0.75))
+	vb.add_child(title)
+	for i in 4:
+		var b := Button.new()
+		b.custom_minimum_size = Vector2(380, 44)
+		b.add_theme_font_size_override("font_size", 18)
+		b.focus_mode = Control.FOCUS_NONE
+		b.pressed.connect(_on_shop_button.bind(i))
+		vb.add_child(b)
+		shop_buttons.append(b)
+	shop_panel.visible = false
+	layer.add_child(shop_panel)
 
 	banner_label = _make_label(layer, Vector2(0, 250), 64, Color(0.6, 1.0, 0.75))
 	banner_label.size = Vector2(1280, 100)
@@ -526,17 +568,32 @@ func _process(delta: float) -> void:
 		aim.y = 0.0
 	player.face(aim)
 
-	var r := brush_radius()
+	var r := tool_radius()
 	aim_ring.global_position = aim + Vector3(0, 0.03, 0)
 	aim_ring.scale = Vector3(r, 1, r)
 
-	var cleaning := Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) and not completed
+	# Konteyner: satış + dükkân
+	var to_container := Vector2(player.global_position.x - container_pos.x, player.global_position.z - container_pos.z).length()
+	if bag > 0 and to_container < 3.2:
+		_sell()
+	shop_panel.visible = to_container < 4.5
+
+	var mouse_on_ui := shop_panel.visible and shop_panel.get_global_rect().has_point(get_viewport().get_mouse_position())
+	var using := Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) and not completed and not mouse_on_ui
+	vacuum_active = false
+	if using:
+		match current_tool:
+			TOOL_BROOM:
+				_clean_leaves(aim, r)
+			TOOL_WASHER:
+				_clean_at(aim, delta)
+			TOOL_VACUUM:
+				vacuum_active = true
+				vacuum_point = aim
 	spray.global_position = aim + Vector3(0, 0.1, 0)
-	spray.emission_sphere_radius = r * 0.6
-	spray.emitting = cleaning
-	if cleaning:
-		_clean_at(aim, delta)
-		_clean_leaves(aim)
+	spray.emission_sphere_radius = r * (0.9 if current_tool == TOOL_VACUUM else 0.6)
+	spray.emitting = using
+	if using:
 		if not spray_player.playing:
 			spray_player.play()
 	elif spray_player.playing:
@@ -555,10 +612,6 @@ func _process(delta: float) -> void:
 	if combo_timer <= 0.0:
 		combo = 0
 
-	# Satış
-	if bag > 0 and Vector2(player.global_position.x - container_pos.x, player.global_position.z - container_pos.z).length() < 3.2:
-		_sell()
-
 	_update_progress()
 	shown_money = move_toward(shown_money, float(money), maxf(1.0, absf(money - shown_money)) * delta * 6.0)
 	_update_hud()
@@ -567,32 +620,105 @@ func _process(delta: float) -> void:
 func _physics_process(_delta: float) -> void:
 	var ppos := player.global_position
 	var full := bag >= bag_capacity()
+	var pull_radius := tool_radius()
+	var swallow_radius := 0.6 + 0.15 * vacuum_level
 	for body: RigidBody3D in trash_bodies.duplicate():
 		if not is_instance_valid(body):
 			trash_bodies.erase(body)
 			continue
 		if full:
 			continue
+		# Üstünden yürüyerek toplama
 		var to_player: Vector3 = ppos - body.global_position
 		to_player.y = 0.0
-		var dist: float = to_player.length()
-		if dist < pickup_radius():
+		if to_player.length() < WALK_PICKUP:
 			_collect_trash(body)
 			full = bag >= bag_capacity()
-		elif vacuum_level > 0 and dist < vacuum_radius():
-			body.sleeping = false
-			body.apply_central_force(to_player.normalized() * (10.0 + 8.0 * vacuum_level) * body.mass)
+			continue
+		# Elektrik süpürgesi: nozüle çek, yakına gelince yut
+		if vacuum_active:
+			var to_nozzle: Vector3 = vacuum_point - body.global_position
+			to_nozzle.y = 0.0
+			var nd: float = to_nozzle.length()
+			if nd < swallow_radius:
+				_collect_trash(body)
+				full = bag >= bag_capacity()
+			elif nd < pull_radius:
+				body.sleeping = false
+				var pull: float = (14.0 + 10.0 * vacuum_level) * (1.0 - nd / pull_radius + 0.3)
+				body.apply_central_force((to_nozzle.normalized() * pull + Vector3.UP * 3.0) * body.mass)
 
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.physical_keycode:
 			KEY_1:
-				_buy_brush()
+				_select_tool(TOOL_BROOM)
 			KEY_2:
-				_buy_bag()
+				_select_tool(TOOL_WASHER)
 			KEY_3:
-				_buy_vacuum()
+				_select_tool(TOOL_VACUUM)
+	elif event is InputEventMouseButton and event.pressed:
+		var step := 0
+		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
+			step = -1
+		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			step = 1
+		if step != 0:
+			var count: int = 3 if vacuum_level > 0 else 2
+			_select_tool(posmod(current_tool + step, count))
+
+
+func _select_tool(t: int) -> void:
+	if t == TOOL_VACUUM and vacuum_level == 0:
+		_float_text(player.global_position + Vector3(0, 2.6, 0), "Elektrik süpürgesi kilitli, dükkândan al", Color(1.0, 0.6, 0.5))
+		_play_blip(blip_stream, 0.5, -8.0)
+		return
+	if t == current_tool:
+		return
+	current_tool = t
+	spray_player.stop()
+	_apply_tool_fx()
+	_play_blip(blip_stream, 0.8, -10.0)
+
+
+func _apply_tool_fx() -> void:
+	match current_tool:
+		TOOL_BROOM:
+			ring_mat.albedo_color = Color(1.0, 0.8, 0.4, 0.25)
+			spray_mat.albedo_color = Color(0.72, 0.5, 0.26)
+			spray.direction = Vector3.UP
+			spray.spread = 80.0
+			spray.initial_velocity_min = 1.0
+			spray.initial_velocity_max = 2.5
+			spray.gravity = Vector3(0, -9.8, 0)
+			spray.radial_accel_min = 4.0
+			spray.radial_accel_max = 8.0
+			spray_player.volume_db = -15.0
+		TOOL_WASHER:
+			ring_mat.albedo_color = Color(0.6, 0.9, 1.0, 0.25)
+			spray_mat.albedo_color = Color(0.7, 0.9, 1.0)
+			spray.direction = Vector3.UP
+			spray.spread = 55.0
+			spray.initial_velocity_min = 2.0
+			spray.initial_velocity_max = 4.5
+			spray.gravity = Vector3(0, -9.8, 0)
+			spray.radial_accel_min = 0.0
+			spray.radial_accel_max = 0.0
+			spray_player.volume_db = -18.0
+		TOOL_VACUUM:
+			ring_mat.albedo_color = Color(0.85, 0.6, 1.0, 0.25)
+			spray_mat.albedo_color = Color(0.92, 0.9, 0.96)
+			spray.direction = Vector3.UP
+			spray.spread = 180.0
+			spray.initial_velocity_min = 0.0
+			spray.initial_velocity_max = 0.3
+			spray.gravity = Vector3.ZERO
+			spray.radial_accel_min = -16.0
+			spray.radial_accel_max = -10.0
+			spray_player.volume_db = -16.0
+	spray_player.stream = tool_streams[current_tool]
+	player.set_tool(current_tool)
 
 
 # =====================================================================
@@ -604,8 +730,8 @@ func _clean_at(world_pos: Vector3, delta: float) -> void:
 	var v := (world_pos.z + AREA_SIZE * 0.5) / AREA_SIZE
 	var cx := int(u * MASK_RES)
 	var cy := int(v * MASK_RES)
-	var r_px := maxi(1, int(ceil(brush_radius() / AREA_SIZE * MASK_RES)))
-	var amount := brush_strength() * delta
+	var r_px := maxi(1, int(ceil(washer_radius() / AREA_SIZE * MASK_RES)))
+	var amount := washer_strength() * delta
 	var changed := false
 	for y in range(maxi(cy - r_px, 0), mini(cy + r_px + 1, MASK_RES)):
 		for x in range(maxi(cx - r_px, 0), mini(cx + r_px + 1, MASK_RES)):
@@ -630,9 +756,8 @@ func _clean_at(world_pos: Vector3, delta: float) -> void:
 		mask_texture.update(mask_image)
 
 
-func _clean_leaves(p: Vector3) -> void:
-	var r := brush_radius() * 1.15
-	var r2 := r * r
+func _clean_leaves(p: Vector3, radius: float) -> void:
+	var r2 := radius * radius
 	for i in LEAF_COUNT:
 		if leaf_alive[i] == 0:
 			continue
@@ -725,50 +850,53 @@ func _fade_mask_step(final: bool) -> void:
 
 
 # =====================================================================
-# YÜKSELTMELER
+# ALETLER VE YÜKSELTMELER
 # =====================================================================
 
-func brush_radius() -> float:
-	return 0.9 + 0.35 * (brush_level - 1)
+func tool_radius() -> float:
+	match current_tool:
+		TOOL_BROOM:
+			return 1.6 + 0.5 * (broom_level - 1)
+		TOOL_VACUUM:
+			return 1.8 + 0.6 * vacuum_level
+	return washer_radius()
 
-func brush_strength() -> float:
-	return 350.0 + 150.0 * (brush_level - 1)
+func washer_radius() -> float:
+	return 0.9 + 0.35 * (washer_level - 1)
+
+func washer_strength() -> float:
+	return 350.0 + 150.0 * (washer_level - 1)
 
 func bag_capacity() -> int:
 	return 6 + 6 * (bag_level - 1)
 
-func pickup_radius() -> float:
-	return 1.3 + 0.4 * vacuum_level
 
-func vacuum_radius() -> float:
-	return 2.5 + 1.5 * vacuum_level
+func _on_shop_button(i: int) -> void:
+	match i:
+		0:
+			if washer_level - 1 < WASHER_PRICES.size() and _try_pay(WASHER_PRICES[washer_level - 1]):
+				washer_level += 1
+				_upgrade_text("Yıkayıcı Sv %d" % washer_level)
+		1:
+			if broom_level - 1 < BROOM_PRICES.size() and _try_pay(BROOM_PRICES[broom_level - 1]):
+				broom_level += 1
+				_upgrade_text("Süpürge Sv %d" % broom_level)
+		2:
+			if vacuum_level < VACUUM_PRICES.size() and _try_pay(VACUUM_PRICES[vacuum_level]):
+				vacuum_level += 1
+				if vacuum_level == 1:
+					_upgrade_text("Elektrik süpürgesi açıldı! [3]")
+					_select_tool(TOOL_VACUUM)
+				else:
+					_upgrade_text("Elektrik süpürgesi Sv %d" % vacuum_level)
+		3:
+			if bag_level - 1 < BAG_PRICES.size() and _try_pay(BAG_PRICES[bag_level - 1]):
+				bag_level += 1
+				_upgrade_text("Çanta %d" % bag_capacity())
 
 
-func _buy_brush() -> void:
-	if brush_level - 1 >= BRUSH_PRICES.size():
-		return
-	var price: int = BRUSH_PRICES[brush_level - 1]
-	if _try_pay(price):
-		brush_level += 1
-		_float_text(player.global_position + Vector3(0, 2.6, 0), "Fırça Sv %d" % brush_level, Color(0.6, 0.9, 1.0))
-
-
-func _buy_bag() -> void:
-	if bag_level - 1 >= BAG_PRICES.size():
-		return
-	var price: int = BAG_PRICES[bag_level - 1]
-	if _try_pay(price):
-		bag_level += 1
-		_float_text(player.global_position + Vector3(0, 2.6, 0), "Çanta %d" % bag_capacity(), Color(0.6, 0.9, 1.0))
-
-
-func _buy_vacuum() -> void:
-	if vacuum_level >= VACUUM_PRICES.size():
-		return
-	var price: int = VACUUM_PRICES[vacuum_level]
-	if _try_pay(price):
-		vacuum_level += 1
-		_float_text(player.global_position + Vector3(0, 2.6, 0), "Vakum Sv %d" % vacuum_level, Color(0.6, 0.9, 1.0))
+func _upgrade_text(text: String) -> void:
+	_float_text(player.global_position + Vector3(0, 2.6, 0), text, Color(0.6, 0.9, 1.0))
 
 
 func _try_pay(price: int) -> bool:
@@ -783,10 +911,15 @@ func _try_pay(price: int) -> bool:
 	return true
 
 
-func _price_text(prices: Array, level_index: int) -> String:
+func _set_shop_button(i: int, label: String, prices: Array, level_index: int, verb: String) -> void:
+	var b: Button = shop_buttons[i]
 	if level_index >= prices.size():
-		return "MAKS"
-	return str(prices[level_index])
+		b.text = "%s   ·   MAKS" % label
+		b.disabled = true
+		return
+	var price: int = prices[level_index]
+	b.text = "%s   ·   %s: %d" % [label, verb, price]
+	b.disabled = money < price
 
 
 func _update_hud() -> void:
@@ -799,11 +932,19 @@ func _update_hud() -> void:
 	progress_bar.value = clean_pct
 	pct_label.text = "Zemin %%%d temiz" % int(clean_pct)
 	count_label.text = "Kalan çöp: %d   ·   Kalan yaprak: %d" % [trash_bodies.size(), leaves_left]
-	shop_label.text = "YÜKSELTMELER\n[1] Fırça  Sv %d  ·  %s\n[2] Çanta  %d  ·  %s\n[3] Vakum  Sv %d  ·  %s" % [
-		brush_level, _price_text(BRUSH_PRICES, brush_level - 1),
-		cap, _price_text(BAG_PRICES, bag_level - 1),
-		vacuum_level, _price_text(VACUUM_PRICES, vacuum_level),
+
+	var vac_text: String = ("Sv %d" % vacuum_level) if vacuum_level > 0 else "kilitli"
+	shop_label.text = "ALETLER\n%s [1] Süpürge  Sv %d\n%s [2] Yıkayıcı  Sv %d\n%s [3] Elk. süpürgesi  %s" % [
+		">" if current_tool == TOOL_BROOM else "  ", broom_level,
+		">" if current_tool == TOOL_WASHER else "  ", washer_level,
+		">" if current_tool == TOOL_VACUUM else "  ", vac_text,
 	]
+
+	if shop_panel.visible:
+		_set_shop_button(0, "Yıkayıcı Sv %d" % washer_level, WASHER_PRICES, washer_level - 1, "Yükselt")
+		_set_shop_button(1, "Süpürge Sv %d" % broom_level, BROOM_PRICES, broom_level - 1, "Yükselt")
+		_set_shop_button(2, "Elektrik süpürgesi " + vac_text, VACUUM_PRICES, vacuum_level, "Satın al" if vacuum_level == 0 else "Yükselt")
+		_set_shop_button(3, "Çanta %d" % cap, BAG_PRICES, bag_level - 1, "Yükselt")
 
 
 # =====================================================================
@@ -863,15 +1004,16 @@ func _make_blip(freq: float, dur: float) -> AudioStreamWAV:
 	return w
 
 
-func _make_noise_loop(dur: float) -> AudioStreamWAV:
+func _make_noise_loop(dur: float, smooth: float, hum_freq: float) -> AudioStreamWAV:
 	var rate := 22050
 	var n := int(rate * dur)
 	var data := PackedByteArray()
 	data.resize(n * 2)
 	var last := 0.0
 	for i in n:
-		last = lerpf(last, randf_range(-1.0, 1.0), 0.35)   # yumuşatılmış beyaz gürültü = su sesi
-		data.encode_s16(i * 2, int(last * 0.6 * 32767.0))
+		last = lerpf(last, randf_range(-1.0, 1.0), smooth)   # yumuşatılmış gürültü
+		var hum: float = sin(TAU * hum_freq * float(i) / rate) * 0.35 if hum_freq > 0.0 else 0.0
+		data.encode_s16(i * 2, int(clampf(last * 0.6 + hum, -1.0, 1.0) * 32767.0))
 	var w := AudioStreamWAV.new()
 	w.format = AudioStreamWAV.FORMAT_16_BITS
 	w.mix_rate = rate
