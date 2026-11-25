@@ -10,6 +10,9 @@ Felaket durumdaki alanları temizleyip çöpten para kazandığın, aletlerini y
 - **Çöplerin üstünden geç:** topla
 - **Yeşil SAT konteyneri:** çantayı sat, yanında açılan dükkândan yükseltme al
 - **1 / 2 / 3 veya fare tekerleği:** süpürge, yıkayıcı, elektrik süpürgesi
+- **ESC:** menü (devam, tam ekran, ses, yeni oyun, kaydet ve çık)
+
+Oyun otomatik kaydedilir (20 saniyede bir, menüyü açınca ve kapatırken).
 
 ## Geliştirme
 Godot 4.3+ ile `project.godot` dosyasını aç, F5 ile çalıştır.

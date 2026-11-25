@@ -92,6 +92,14 @@ var trash_bodies: Array[RigidBody3D] = []
 var tree_positions: Array[Vector3] = []
 var trash_pool: Array = []
 var flower_nodes: Array[Node3D] = []
+var find_positions: Array[Vector3] = []
+var found_finds: Array[int] = []
+var world_seed := 0
+var master_volume := 0.8
+var paused := false
+var pause_panel: PanelContainer
+var fullscreen_button: Button
+var autosave_timer := 0.0
 
 # --- Yapraklar (binlerce, fizik yok) ---
 var leaf_mm: MultiMeshInstance3D
@@ -124,18 +132,29 @@ var shop_buttons: Array[Button] = []
 
 
 func _ready() -> void:
+	# Dünya sabit bir tohumla kurulur ki kayıttan yüklerken her şey aynı yerde olsun
+	var save := _load_save()
 	randomize()
+	world_seed = int(save.get("seed", randi()))
+	seed(world_seed)
 	_setup_input()
 	_build_environment()
 	_build_ground()
 	_build_props()
 	_build_container()
 	_build_player()
-	_spawn_all_trash()
 	_build_leaves()
+	_place_finds()
+	randomize()
 	_build_tool_visuals()
 	_build_audio()
 	_build_hud()
+	_build_pause_menu()
+	if save.is_empty():
+		_spawn_all_trash()
+	else:
+		_apply_save(save)
+	_set_volume(master_volume)
 	_apply_tool_fx()
 	_update_hud()
 
@@ -404,12 +423,14 @@ func _spawn_all_trash() -> void:
 		placed += 1
 
 
-func _spawn_trash(pos: Vector3) -> void:
+func _spawn_trash(pos: Vector3, type_index: int = -1, restore_rot = null) -> void:
 	if trash_pool.is_empty():
-		for t in TRASH_TYPES:
-			for k in int(t[3]):
-				trash_pool.append(t)
-	var t: Array = trash_pool[randi() % trash_pool.size()]
+		for ti in TRASH_TYPES.size():
+			for k in int(TRASH_TYPES[ti][3]):
+				trash_pool.append(ti)
+	if type_index < 0:
+		type_index = trash_pool[randi() % trash_pool.size()]
+	var t: Array = TRASH_TYPES[type_index]
 	var size: float = t[1]
 	var body := RigidBody3D.new()
 	body.collision_layer = 2
@@ -429,6 +450,13 @@ func _spawn_trash(pos: Vector3) -> void:
 	body.add_child(model)
 	body.add_child(cs)
 	body.set_meta("value", int(t[2]))
+	body.set_meta("type_index", type_index)
+	if restore_rot != null:
+		body.position = pos
+		body.rotation = restore_rot
+		add_child(body)
+		trash_bodies.append(body)
+		return
 	body.position = pos + Vector3(0, dims.y * 0.5 + 0.3, 0)
 	if size < 0.9:
 		body.rotation = Vector3(randf() * TAU, randf() * TAU, randf() * TAU)
@@ -562,7 +590,7 @@ func _build_hud() -> void:
 
 	shop_label = _make_label(layer, Vector2(990, 14), 20, Color.WHITE)
 	info_label = _make_label(layer, Vector2(24, 676), 18, Color(1, 1, 1, 0.85))
-	info_label.text = "WASD: yürü   ·   Sol tık basılı: aleti kullan   ·   1 / 2 / 3 veya tekerlek: alet değiştir   ·   Yeşil konteyner: sat ve dükkân"
+	info_label.text = "WASD: yürü   ·   Sol tık basılı: aleti kullan   ·   1 / 2 / 3 veya tekerlek: alet değiştir   ·   Konteyner: sat ve dükkân   ·   ESC: menü"
 
 	# Dükkân paneli: konteynerin yanına gelince açılır
 	shop_panel = PanelContainer.new()
@@ -602,6 +630,12 @@ func _build_hud() -> void:
 # =====================================================================
 
 func _process(delta: float) -> void:
+	if paused:
+		return
+	autosave_timer += delta
+	if autosave_timer > 20.0:
+		autosave_timer = 0.0
+		_save_game()
 	# Kamera takibi
 	var target := player.global_position + cam_offset
 	camera.global_position = camera.global_position.lerp(target, clampf(5.0 * delta, 0.0, 1.0))
@@ -671,6 +705,8 @@ func _process(delta: float) -> void:
 
 
 func _physics_process(_delta: float) -> void:
+	if paused:
+		return
 	var ppos := player.global_position
 	var full := bag >= bag_capacity()
 	var pull_radius := tool_radius()
@@ -703,6 +739,11 @@ func _physics_process(_delta: float) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_ESCAPE:
+		_toggle_pause()
+		return
+	if paused:
+		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.physical_keycode:
 			KEY_1:
@@ -807,6 +848,7 @@ func _clean_at(world_pos: Vector3, delta: float) -> void:
 	if changed:
 		mask_image.set_data(MASK_RES, MASK_RES, false, Image.FORMAT_L8, mask_data)
 		mask_texture.update(mask_image)
+		_check_finds()
 
 
 func _clean_leaves(p: Vector3, radius: float) -> void:
@@ -997,7 +1039,7 @@ func _update_hud() -> void:
 	bag_label.text = bag_text
 	progress_bar.value = clean_pct
 	pct_label.text = "Zemin %%%d temiz" % int(clean_pct)
-	count_label.text = "Kalan çöp: %d   ·   Kalan yaprak: %d" % [trash_bodies.size(), leaves_left]
+	count_label.text = "Kalan çöp: %d   ·   Kalan yaprak: %d   ·   Buluntu: %d / %d" % [trash_bodies.size(), leaves_left, found_finds.size(), FINDS.size()]
 
 	var vac_text: String = ("Sv %d" % vacuum_level) if vacuum_level > 0 else "kilitli"
 	shop_label.text = "ALETLER\n%s [1] Süpürge  Sv %d\n%s [2] Yıkayıcı  Sv %d\n%s [3] Elk. süpürgesi  %s" % [
@@ -1131,3 +1173,268 @@ func _add_child_mesh(parent: Node3D, mesh: Mesh, pos: Vector3) -> MeshInstance3D
 	mi.position = pos
 	parent.add_child(mi)
 	return mi
+
+
+# =====================================================================
+# BULUNTULAR (kirin altından çıkan gizli eşyalar)
+# =====================================================================
+
+const FINDS := [
+	["Eski bozuk para", 15], ["Kayıp yüzük", 60], ["Paslı anahtar", 20], ["Oyuncak araba", 30],
+	["Antika cep saati", 80], ["Gümüş kaşık", 35], ["Cam misket", 15], ["Eski fotoğraf", 25],
+]
+
+func _place_finds() -> void:
+	var half := AREA_SIZE * 0.5 - 3.0
+	for i in FINDS.size():
+		find_positions.append(Vector3(randf_range(-half, half), 0, randf_range(-half, half)))
+
+
+func _check_finds() -> void:
+	for i in find_positions.size():
+		if found_finds.has(i):
+			continue
+		var p: Vector3 = find_positions[i]
+		var px := clampi(int((p.x / AREA_SIZE + 0.5) * MASK_RES), 0, MASK_RES - 1)
+		var py := clampi(int((p.z / AREA_SIZE + 0.5) * MASK_RES), 0, MASK_RES - 1)
+		var v: int = mask_data[py * MASK_RES + px]
+		if v < CLEAN_THRESHOLD:
+			_reveal_find(i)
+
+
+func _reveal_find(i: int) -> void:
+	found_finds.append(i)
+	var info: Array = FINDS[i]
+	var value: int = info[1]
+	money += value
+	var p: Vector3 = find_positions[i]
+	_float_text(p + Vector3(0, 1.4, 0), "Buldun: %s!  +%d" % [info[0], value], Color(1.0, 0.85, 0.3))
+	for k in 5:
+		get_tree().create_timer(0.07 * k).timeout.connect(_play_blip.bind(coin_stream, 1.0 + k * 0.12, -4.0))
+	# Altın parıltı patlaması
+	var burst := CPUParticles3D.new()
+	burst.one_shot = true
+	burst.explosiveness = 0.9
+	burst.amount = 40
+	burst.lifetime = 1.0
+	var spark := SphereMesh.new()
+	spark.radius = 0.05
+	spark.height = 0.1
+	spark.radial_segments = 4
+	spark.rings = 2
+	var sm := StandardMaterial3D.new()
+	sm.albedo_color = Color(1.0, 0.85, 0.3)
+	sm.emission_enabled = true
+	sm.emission = Color(1.0, 0.75, 0.2)
+	sm.emission_energy_multiplier = 3.0
+	spark.material = sm
+	burst.mesh = spark
+	burst.direction = Vector3.UP
+	burst.spread = 60.0
+	burst.initial_velocity_min = 3.0
+	burst.initial_velocity_max = 6.0
+	burst.position = p + Vector3(0, 0.2, 0)
+	add_child(burst)
+	burst.emitting = true
+	get_tree().create_timer(2.0).timeout.connect(burst.queue_free)
+
+
+# =====================================================================
+# KAYIT
+# =====================================================================
+
+const SAVE_PATH := "user://kayit.json"
+
+func _load_save() -> Dictionary:
+	if not FileAccess.file_exists(SAVE_PATH):
+		return {}
+	var f := FileAccess.open(SAVE_PATH, FileAccess.READ)
+	if f == null:
+		return {}
+	var parsed: Variant = JSON.parse_string(f.get_as_text())
+	if parsed is Dictionary:
+		return parsed
+	return {}
+
+
+func _save_game() -> void:
+	var trash := []
+	for b: RigidBody3D in trash_bodies:
+		if is_instance_valid(b):
+			var bp := b.global_position
+			var br := b.rotation
+			trash.append([int(b.get_meta("type_index", 0)), bp.x, bp.y, bp.z, br.x, br.y, br.z])
+	var data := {
+		"version": 1,
+		"seed": world_seed,
+		"money": money,
+		"washer": washer_level, "broom": broom_level, "vacuum": vacuum_level, "bag_level": bag_level,
+		"bag": bag, "bag_value": bag_value, "tool": current_tool,
+		"completed": completed, "milestone": next_milestone,
+		"clean_pixels": clean_pixel_count,
+		"mask": Marshalls.raw_to_base64(mask_data.compress(FileAccess.COMPRESSION_DEFLATE)),
+		"leaves": Marshalls.raw_to_base64(leaf_alive),
+		"trash": trash,
+		"finds": found_finds,
+		"player": [player.global_position.x, player.global_position.z],
+		"volume": master_volume,
+	}
+	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(data))
+
+
+func _apply_save(d: Dictionary) -> void:
+	money = int(d.get("money", 0))
+	shown_money = float(money)
+	washer_level = int(d.get("washer", 1))
+	broom_level = int(d.get("broom", 1))
+	vacuum_level = int(d.get("vacuum", 0))
+	bag_level = int(d.get("bag_level", 1))
+	bag = int(d.get("bag", 0))
+	bag_value = int(d.get("bag_value", 0))
+	current_tool = int(d.get("tool", TOOL_WASHER))
+	completed = bool(d.get("completed", false))
+	next_milestone = int(d.get("milestone", 25))
+	clean_pixel_count = int(d.get("clean_pixels", 0))
+	master_volume = float(d.get("volume", 0.8))
+
+	var packed: PackedByteArray = Marshalls.base64_to_raw(str(d.get("mask", "")))
+	if packed.size() > 0:
+		var raw := packed.decompress(MASK_RES * MASK_RES, FileAccess.COMPRESSION_DEFLATE)
+		if raw.size() == MASK_RES * MASK_RES:
+			mask_data = raw
+			mask_image.set_data(MASK_RES, MASK_RES, false, Image.FORMAT_L8, mask_data)
+			mask_texture.update(mask_image)
+
+	var leaves: PackedByteArray = Marshalls.base64_to_raw(str(d.get("leaves", "")))
+	if leaves.size() == LEAF_COUNT:
+		leaves_left = 0
+		for i in LEAF_COUNT:
+			leaf_alive[i] = leaves[i]
+			if leaves[i] == 0:
+				leaf_mm.multimesh.set_instance_transform(i, Transform3D(Basis().scaled(Vector3.ONE * 0.001), Vector3(0, -2, 0)))
+			else:
+				leaves_left += 1
+
+	for item in d.get("trash", []):
+		var a: Array = item
+		_spawn_trash(Vector3(a[1], a[2], a[3]), int(a[0]), Vector3(a[4], a[5], a[6]))
+
+	for i in d.get("finds", []):
+		found_finds.append(int(i))
+
+	var pp: Array = d.get("player", [])
+	if pp.size() == 2:
+		player.position = Vector3(pp[0], 0.1, pp[1])
+		camera.global_position = player.position + cam_offset
+
+	if completed:
+		for f: Node3D in flower_nodes:
+			f.scale = f.get_meta("full_scale")
+			f.visible = true
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST and player != null:
+		_save_game()
+
+
+# =====================================================================
+# DURAKLATMA MENÜSÜ
+# =====================================================================
+
+func _build_pause_menu() -> void:
+	var layer := CanvasLayer.new()
+	layer.layer = 10
+	add_child(layer)
+	pause_panel = PanelContainer.new()
+	pause_panel.position = Vector2(440, 170)
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.06, 0.09, 0.08, 0.94)
+	sb.set_corner_radius_all(12)
+	sb.set_content_margin_all(22)
+	pause_panel.add_theme_stylebox_override("panel", sb)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 12)
+	pause_panel.add_child(vb)
+	var title := Label.new()
+	title.text = "JUNK TO SHINE"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 30)
+	title.add_theme_color_override("font_color", Color(0.6, 1.0, 0.75))
+	vb.add_child(title)
+	_menu_button(vb, "Devam et", _toggle_pause)
+	fullscreen_button = _menu_button(vb, "", _toggle_fullscreen)
+	var vol_row := HBoxContainer.new()
+	var vol_label := Label.new()
+	vol_label.text = "Ses"
+	vol_label.custom_minimum_size = Vector2(60, 0)
+	vol_label.add_theme_font_size_override("font_size", 20)
+	vol_row.add_child(vol_label)
+	var slider := HSlider.new()
+	slider.min_value = 0.0
+	slider.max_value = 1.0
+	slider.step = 0.05
+	slider.value = master_volume
+	slider.custom_minimum_size = Vector2(300, 32)
+	slider.focus_mode = Control.FOCUS_NONE
+	slider.value_changed.connect(_set_volume)
+	vol_row.add_child(slider)
+	vb.add_child(vol_row)
+	_menu_button(vb, "Yeni oyun (kaydı sil)", _new_game)
+	_menu_button(vb, "Kaydet ve çık", _save_and_quit)
+	pause_panel.visible = false
+	layer.add_child(pause_panel)
+	_update_fullscreen_text()
+
+
+func _menu_button(parent: Node, text: String, cb: Callable) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.custom_minimum_size = Vector2(380, 48)
+	b.add_theme_font_size_override("font_size", 20)
+	b.focus_mode = Control.FOCUS_NONE
+	b.pressed.connect(cb)
+	parent.add_child(b)
+	return b
+
+
+func _toggle_pause() -> void:
+	paused = not paused
+	pause_panel.visible = paused
+	player.set_physics_process(not paused)
+	spray.emitting = false
+	if spray_player.playing:
+		spray_player.stop()
+	if paused:
+		_save_game()
+
+
+func _toggle_fullscreen() -> void:
+	if DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN:
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
+	else:
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
+	_update_fullscreen_text()
+
+
+func _update_fullscreen_text() -> void:
+	var fs := DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN
+	fullscreen_button.text = "Pencere moduna geç" if fs else "Tam ekrana geç"
+
+
+func _set_volume(v: float) -> void:
+	master_volume = v
+	AudioServer.set_bus_volume_db(0, linear_to_db(maxf(v, 0.0001)))
+
+
+func _new_game() -> void:
+	if FileAccess.file_exists(SAVE_PATH):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(SAVE_PATH))
+	get_tree().reload_current_scene()
+
+
+func _save_and_quit() -> void:
+	_save_game()
+	get_tree().quit()
