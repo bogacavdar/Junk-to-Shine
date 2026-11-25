@@ -132,6 +132,8 @@ var crosshair: Label
 var prompt_label: Label
 var near_shop := false
 var shop_open := false
+var is_mobile := OS.has_feature("mobile")
+var touch = null   # touch_controls.gd (sadece telefonda)
 var water_stream: MeshInstance3D
 var shop_buttons: Array[Button] = []
 
@@ -154,6 +156,11 @@ func _ready() -> void:
 	_build_tool_visuals()
 	_build_audio()
 	_build_hud()
+	if is_mobile:
+		touch = load("res://scripts/touch_controls.gd").new()
+		add_child(touch)
+		touch.player = player
+		info_label.text = "Sol: yürü   ·   Sağda kaydır: bak   ·   KULLAN basılı: temizle   ·   ALET: değiştir   ·   Konteyner yanında: DÜKKÂN"
 	_build_pause_menu()
 	if save.is_empty():
 		_spawn_all_trash()
@@ -169,10 +176,56 @@ func _ready() -> void:
 # =====================================================================
 
 func _setup_input() -> void:
+	# Klavye + kontrolcü (Xbox / PlayStation düzeni)
 	_add_key_action("move_left", [KEY_A, KEY_LEFT])
 	_add_key_action("move_right", [KEY_D, KEY_RIGHT])
 	_add_key_action("move_up", [KEY_W, KEY_UP])
 	_add_key_action("move_down", [KEY_S, KEY_DOWN])
+	_add_joy_axis("move_left", JOY_AXIS_LEFT_X, -1.0)
+	_add_joy_axis("move_right", JOY_AXIS_LEFT_X, 1.0)
+	_add_joy_axis("move_up", JOY_AXIS_LEFT_Y, -1.0)
+	_add_joy_axis("move_down", JOY_AXIS_LEFT_Y, 1.0)
+	_add_joy_axis("look_left", JOY_AXIS_RIGHT_X, -1.0)
+	_add_joy_axis("look_right", JOY_AXIS_RIGHT_X, 1.0)
+	_add_joy_axis("look_up", JOY_AXIS_RIGHT_Y, -1.0)
+	_add_joy_axis("look_down", JOY_AXIS_RIGHT_Y, 1.0)
+	_add_key_action("run", [KEY_SHIFT])
+	_add_joy_button("run", JOY_BUTTON_LEFT_STICK)
+	_add_key_action("use_tool", [])
+	_add_joy_axis("use_tool", JOY_AXIS_TRIGGER_RIGHT, 1.0)
+	if not is_mobile:
+		var mb := InputEventMouseButton.new()
+		mb.button_index = MOUSE_BUTTON_LEFT
+		InputMap.action_add_event("use_tool", mb)
+	_add_key_action("tool_next", [])
+	_add_joy_button("tool_next", JOY_BUTTON_RIGHT_SHOULDER)
+	_add_key_action("tool_prev", [])
+	_add_joy_button("tool_prev", JOY_BUTTON_LEFT_SHOULDER)
+	_add_key_action("interact", [KEY_E])
+	_add_joy_button("interact", JOY_BUTTON_A)
+	_add_key_action("pause", [KEY_ESCAPE])
+	_add_joy_button("pause", JOY_BUTTON_START)
+	_add_key_action("back", [])
+	_add_joy_button("back", JOY_BUTTON_B)
+	for a in ["move_left", "move_right", "move_up", "move_down", "look_left", "look_right", "look_up", "look_down"]:
+		InputMap.action_set_deadzone(a, 0.2)
+
+
+func _add_joy_axis(action: String, axis: JoyAxis, dir: float) -> void:
+	if not InputMap.has_action(action):
+		InputMap.add_action(action)
+	var ev := InputEventJoypadMotion.new()
+	ev.axis = axis
+	ev.axis_value = dir
+	InputMap.action_add_event(action, ev)
+
+
+func _add_joy_button(action: String, button: JoyButton) -> void:
+	if not InputMap.has_action(action):
+		InputMap.add_action(action)
+	var ev := InputEventJoypadButton.new()
+	ev.button_index = button
+	InputMap.action_add_event(action, ev)
 
 
 func _add_key_action(action: String, keys: Array) -> void:
@@ -411,7 +464,8 @@ func _build_player() -> void:
 
 	player.rotation.y = 0.0
 	camera = player.camera
-	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	if not is_mobile:
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
 func _spawn_all_trash() -> void:
@@ -601,7 +655,7 @@ func _build_hud() -> void:
 
 	shop_label = _make_label(layer, Vector2(990, 14), 20, Color.WHITE)
 	info_label = _make_label(layer, Vector2(24, 676), 18, Color(1, 1, 1, 0.85))
-	info_label.text = "WASD: yürü   ·   Fare: bak   ·   Shift: koş   ·   Sol tık basılı: aleti kullan   ·   1 / 2 / 3 veya tekerlek: alet değiştir   ·   Konteyner: sat, E: dükkân   ·   ESC: menü"
+	info_label.text = "WASD: yürü   ·   Fare: bak   ·   Shift: koş   ·   Sol tık basılı: aleti kullan   ·   1 / 2 / 3 veya tekerlek: alet değiştir   ·   Konteyner: sat, E: dükkân   ·   ESC: menü   ·   Kontrolcü destekli"
 
 	# Dükkân paneli: konteynerin yanına gelince açılır
 	shop_panel = PanelContainer.new()
@@ -623,7 +677,7 @@ func _build_hud() -> void:
 		var b := Button.new()
 		b.custom_minimum_size = Vector2(380, 44)
 		b.add_theme_font_size_override("font_size", 18)
-		b.focus_mode = Control.FOCUS_NONE
+		b.focus_mode = Control.FOCUS_ALL
 		b.pressed.connect(_on_shop_button.bind(i))
 		vb.add_child(b)
 		shop_buttons.append(b)
@@ -637,7 +691,7 @@ func _build_hud() -> void:
 	prompt_label = _make_label(layer, Vector2(0, 430), 26, Color(0.7, 1.0, 0.8))
 	prompt_label.size = Vector2(1280, 40)
 	prompt_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	prompt_label.text = "E: Dükkânı aç"
+	prompt_label.text = "DÜKKÂN butonuna bas" if is_mobile else "E  /  (A): Dükkânı aç"
 	prompt_label.visible = false
 
 	banner_label = _make_label(layer, Vector2(0, 250), 64, Color(0.6, 1.0, 0.75))
@@ -684,7 +738,9 @@ func _process(delta: float) -> void:
 	prompt_label.visible = near_shop and not shop_open
 	crosshair.visible = not shop_open
 
-	var using := Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) and not completed and not shop_open and aim_valid and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
+	if touch != null:
+		touch.set_interact_visible(near_shop or shop_open)
+	var using := Input.is_action_pressed("use_tool") and not completed and not shop_open and aim_valid
 	vacuum_active = false
 	if using:
 		match current_tool:
@@ -758,22 +814,32 @@ func _physics_process(_delta: float) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_ESCAPE:
+	if event.is_action_pressed("pause"):
 		if shop_open:
 			_set_shop_open(false)
 		else:
 			_toggle_pause()
 		return
+	if event.is_action_pressed("back"):
+		if shop_open:
+			_set_shop_open(false)
+		elif paused:
+			_toggle_pause()
+		return
 	if paused:
 		return
-	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_E:
+	if event.is_action_pressed("interact"):
 		if shop_open:
 			_set_shop_open(false)
 		elif near_shop:
 			_set_shop_open(true)
 		return
-	# Fare bırakıldıysa tıklayınca yeniden yakala
-	if event is InputEventMouseButton and event.pressed and not shop_open and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
+	if event.is_action_pressed("tool_next") or event.is_action_pressed("tool_prev"):
+		var count_t: int = 3 if vacuum_level > 0 else 2
+		_select_tool(posmod(current_tool + (1 if event.is_action_pressed("tool_next") else -1), count_t))
+		return
+	# Fare bırakıldıysa tıklayınca yeniden yakala (masaüstü)
+	if not is_mobile and event is InputEventMouseButton and event.pressed and not shop_open and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 		return
 	if event is InputEventKey and event.pressed and not event.echo:
@@ -1411,7 +1477,7 @@ func _build_pause_menu() -> void:
 	slider.step = 0.05
 	slider.value = master_volume
 	slider.custom_minimum_size = Vector2(300, 32)
-	slider.focus_mode = Control.FOCUS_NONE
+	slider.focus_mode = Control.FOCUS_ALL
 	slider.value_changed.connect(_set_volume)
 	vol_row.add_child(slider)
 	vb.add_child(vol_row)
@@ -1427,7 +1493,7 @@ func _menu_button(parent: Node, text: String, cb: Callable) -> Button:
 	b.text = text
 	b.custom_minimum_size = Vector2(380, 48)
 	b.add_theme_font_size_override("font_size", 20)
-	b.focus_mode = Control.FOCUS_NONE
+	b.focus_mode = Control.FOCUS_ALL
 	b.pressed.connect(cb)
 	parent.add_child(b)
 	return b
@@ -1438,7 +1504,12 @@ func _toggle_pause() -> void:
 	pause_panel.visible = paused
 	player.set_physics_process(not paused)
 	player.look_enabled = not paused
-	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if paused else Input.MOUSE_MODE_CAPTURED
+	if not is_mobile:
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if paused else Input.MOUSE_MODE_CAPTURED
+	if paused:
+		_focus_first(pause_panel)
+	elif get_viewport().gui_get_focus_owner() != null:
+		get_viewport().gui_get_focus_owner().release_focus()
 	_update_water_stream(false, Vector3.ZERO)
 	spray.emitting = false
 	if spray_player.playing:
@@ -1485,7 +1556,12 @@ func _set_shop_open(open: bool) -> void:
 	shop_panel.visible = open
 	player.look_enabled = not open
 	player.set_physics_process(not open)
-	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if open else Input.MOUSE_MODE_CAPTURED
+	if not is_mobile:
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if open else Input.MOUSE_MODE_CAPTURED
+	if open:
+		shop_buttons[0].grab_focus()
+	elif get_viewport().gui_get_focus_owner() != null:
+		get_viewport().gui_get_focus_owner().release_focus()
 	if open:
 		_update_water_stream(false, Vector3.ZERO)
 
@@ -1520,3 +1596,14 @@ func _update_water_stream(active: bool, target: Vector3) -> void:
 	var up := Vector3.UP if absf(dir.normalized().y) < 0.99 else Vector3.FORWARD
 	var b := Basis.looking_at(dir.normalized(), up) * Basis(Vector3.RIGHT, -PI * 0.5) * Basis.from_scale(Vector3(1, length, 1))
 	water_stream.global_transform = Transform3D(b, (from + to) * 0.5)
+
+
+## Kontrolcüyle menüde gezinmek için ilk butona odaklan
+func _focus_first(root: Node) -> void:
+	for c in root.get_children():
+		if c is Button:
+			(c as Button).grab_focus()
+			return
+		_focus_first(c)
+		if get_viewport().gui_get_focus_owner() != null:
+			return

@@ -115,7 +115,12 @@ func _physics_process(delta: float) -> void:
 	var dir := Vector3.ZERO
 	if input.length() > 0.05:
 		dir = (transform.basis * Vector3(input.x, 0, input.y)).normalized()
-	var running := Input.is_key_pressed(KEY_SHIFT)
+	# Kontrolcü sağ çubuğu ile bakış
+	if look_enabled:
+		var look := Input.get_vector("look_left", "look_right", "look_up", "look_down")
+		if look.length() > 0.0:
+			add_look(Vector2(look.x * 2.6, look.y * 2.0) * delta * (1.0 + look.length()))
+	var running := Input.is_action_pressed("run")
 	var spd := run_speed if running else walk_speed
 	velocity.x = dir.x * spd
 	velocity.z = dir.z * spd
@@ -132,6 +137,14 @@ func _physics_process(delta: float) -> void:
 		bob_time = lerpf(bob_time, roundf(bob_time / PI) * PI, clampf(delta * 6.0, 0.0, 1.0))
 	camera.position.y = sin(bob_time) * 0.035
 	tool_root.position = TOOL_BASE + Vector3(cos(bob_time * 0.5) * 0.012, sin(bob_time) * 0.018, 0)
+
+
+## Bakış açısını değiştirir (radyan cinsinden yatay/dikey). Kontrolcü ve dokunmatik kullanır.
+func add_look(v: Vector2) -> void:
+	if not look_enabled:
+		return
+	rotate_y(-v.x)
+	head.rotation.x = clampf(head.rotation.x - v.y, deg_to_rad(-85.0), deg_to_rad(80.0))
 
 
 func nozzle_position() -> Vector3:

@@ -1,4 +1,4 @@
-name: Windows derlemesi
+name: Derleme (Windows + Android)
 
 on:
   push:
@@ -22,35 +22,74 @@ jobs:
       image: barichello/godot-ci:4.3
     steps:
       - uses: actions/checkout@v4
-
       - name: Export sablonlarini yerlestir
         run: |
           mkdir -v -p ~/.local/share/godot/export_templates/
           mv /root/.local/share/godot/export_templates/${GODOT_VERSION}.stable ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
-
       - name: Projeyi ice aktar ve betikleri kontrol et
         run: |
           godot --headless --import > import.log 2>&1 || true
           cat import.log
           if grep -q "SCRIPT ERROR" import.log; then echo "Betik hatasi var, derleme durduruldu."; exit 1; fi
-
       - name: Windows icin derle
         run: |
           mkdir -v -p build/windows
           godot --headless --verbose --export-release "Windows" build/windows/JunkToShine.exe
-          ls -la build/windows
           test -s build/windows/JunkToShine.exe
-
       - name: Zip'le
         run: |
           apt-get update -qq && apt-get install -y -qq zip > /dev/null
           cd build/windows && zip -r ../JunkToShine-Windows.zip .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: build/JunkToShine-Windows.zip
 
-      - name: Surumu yayinla
-        uses: softprops/action-gh-release@v2
+  android:
+    runs-on: ubuntu-latest
+    container:
+      image: barichello/godot-ci:4.3
+    env:
+      GODOT_ANDROID_KEYSTORE_DEBUG_PATH: /root/debug.keystore
+      GODOT_ANDROID_KEYSTORE_DEBUG_USER: androiddebugkey
+      GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD: android
+    steps:
+      - uses: actions/checkout@v4
+      - name: Export sablonlari ve Android ayarlari
+        run: |
+          mkdir -v -p ~/.local/share/godot/export_templates/ ~/.config/
+          mv /root/.config/godot ~/.config/godot || true
+          mv /root/.local/share/godot/export_templates/${GODOT_VERSION}.stable ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
+          ls -la /root/*.keystore || true
+      - name: Projeyi ice aktar
+        run: godot --headless --import > import.log 2>&1 || true
+      - name: Android icin derle (APK)
+        run: |
+          mkdir -v -p build/android
+          godot --headless --verbose --export-debug "Android" build/android/JunkToShine.apk
+          test -s build/android/JunkToShine.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: build/android/JunkToShine.apk
+
+  release:
+    needs: [windows, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
           name: "Junk to Shine - derleme ${{ github.run_number }}"
-          body: "Otomatik Windows derlemesi. Zip'i ac, JunkToShine.exe'yi calistir."
-          files: build/JunkToShine-Windows.zip
+          body: |
+            Otomatik derleme.
+            - Windows: JunkToShine-Windows.zip dosyasini ac, JunkToShine.exe'yi calistir.
+            - Android: JunkToShine.apk dosyasini telefona indirip kur (bilinmeyen kaynaklara izin ver).
+          files: |
+            dist/JunkToShine-Windows.zip
+            dist/JunkToShine.apk
           make_latest: true
