@@ -11,6 +11,7 @@ var head: Node3D
 var camera: Camera3D
 var tool_root: Node3D
 var tool_nodes: Array[Node3D] = []
+var nozzle_marker: Node3D
 
 const TOOL_BASE := Vector3(0.3, -0.3, -0.55)
 var bob_time := 0.0
@@ -79,26 +80,80 @@ func _build_tools() -> void:
 		var bm := _add_to(broom, bristle, Vector3(bx, -1.81, 0.0))
 		bm.rotation_degrees = Vector3(0, 0, randf_range(-6.0, 6.0))
 
-	# Basınçlı yıkama tabancası
+	# Basınçlı yıkama tabancası: sarı gövde, kabza, tetik, metal uzatma borusu, nozül, hortum.
+	# Tabanca nişangâha (ekran ortasında ~3 m ileri) bakacak şekilde döndürülür.
 	var gun := Node3D.new()
 	tool_root.add_child(gun)
-	var body := BoxMesh.new()
-	body.size = Vector3(0.07, 0.14, 0.22)
-	body.material = _mat(Color(0.9, 0.75, 0.1), 0.45)
-	_add_to(gun, body, Vector3(0, 0, 0))
-	var barrel := CylinderMesh.new()
-	barrel.top_radius = 0.016
-	barrel.bottom_radius = 0.02
-	barrel.height = 0.55
-	barrel.radial_segments = 12
-	barrel.material = _mat(Color(0.2, 0.2, 0.22), 0.3)
-	var barrel_mi := _add_to(gun, barrel, Vector3(0, 0.04, -0.35))
-	barrel_mi.rotation_degrees = Vector3(-90, 0, 0)
-	var grip := BoxMesh.new()
-	grip.size = Vector3(0.05, 0.14, 0.06)
-	grip.material = _mat(Color(0.15, 0.15, 0.16), 0.8)
-	var grip_mi := _add_to(gun, grip, Vector3(0, -0.1, 0.04))
-	grip_mi.rotation_degrees = Vector3(15, 0, 0)
+	gun.basis = Basis.looking_at((Vector3(0, 0, -3.0) - TOOL_BASE).normalized(), Vector3.UP)
+	var yellow := _mat(Color(0.95, 0.72, 0.05), 0.4)
+	var black := _mat(Color(0.06, 0.06, 0.07), 0.7)
+	var steel := StandardMaterial3D.new()
+	steel.albedo_color = Color(0.75, 0.76, 0.78)
+	steel.metallic = 0.9
+	steel.roughness = 0.28
+
+	var body := CapsuleMesh.new()
+	body.radius = 0.035
+	body.height = 0.26
+	body.material = yellow
+	var body_mi := _add_to(gun, body, Vector3(0, 0, 0.02))
+	body_mi.rotation_degrees = Vector3(90, 0, 0)
+	var grip := CapsuleMesh.new()
+	grip.radius = 0.024
+	grip.height = 0.16
+	grip.material = black
+	var grip_mi := _add_to(gun, grip, Vector3(0, -0.075, 0.09))
+	grip_mi.rotation_degrees = Vector3(-18, 0, 0)
+	var trigger := BoxMesh.new()
+	trigger.size = Vector3(0.014, 0.05, 0.02)
+	trigger.material = black
+	var trig_mi := _add_to(gun, trigger, Vector3(0, -0.05, 0.035))
+	trig_mi.rotation_degrees = Vector3(-15, 0, 0)
+
+	var lance := CylinderMesh.new()
+	lance.top_radius = 0.009
+	lance.bottom_radius = 0.009
+	lance.height = 0.62
+	lance.radial_segments = 12
+	lance.material = steel
+	var lance_mi := _add_to(gun, lance, Vector3(0, 0.005, -0.42))
+	lance_mi.rotation_degrees = Vector3(90, 0, 0)
+	var sleeve := CylinderMesh.new()
+	sleeve.top_radius = 0.016
+	sleeve.bottom_radius = 0.016
+	sleeve.height = 0.1
+	sleeve.radial_segments = 12
+	sleeve.material = black
+	var sleeve_mi := _add_to(gun, sleeve, Vector3(0, 0.005, -0.16))
+	sleeve_mi.rotation_degrees = Vector3(90, 0, 0)
+	var nozzle := CylinderMesh.new()
+	nozzle.top_radius = 0.018
+	nozzle.bottom_radius = 0.013
+	nozzle.height = 0.07
+	nozzle.radial_segments = 12
+	nozzle.material = black
+	var noz_mi := _add_to(gun, nozzle, Vector3(0, 0.005, -0.76))
+	noz_mi.rotation_degrees = Vector3(90, 0, 0)
+	var tip := CylinderMesh.new()
+	tip.top_radius = 0.009
+	tip.bottom_radius = 0.011
+	tip.height = 0.025
+	tip.radial_segments = 10
+	tip.material = _mat(Color(0.85, 0.1, 0.08), 0.5)
+	var tip_mi := _add_to(gun, tip, Vector3(0, 0.005, -0.805))
+	tip_mi.rotation_degrees = Vector3(90, 0, 0)
+	nozzle_marker = Node3D.new()
+	nozzle_marker.position = Vector3(0, 0.005, -0.82)
+	gun.add_child(nozzle_marker)
+
+	var hose := CylinderMesh.new()
+	hose.top_radius = 0.011
+	hose.bottom_radius = 0.011
+	hose.height = 0.6
+	hose.radial_segments = 8
+	hose.material = black
+	var hose_mi := _add_to(gun, hose, Vector3(0, -0.2, 0.25))
+	hose_mi.rotation_degrees = Vector3(-35, 0, 0)
 
 	# Elektrik süpürgesi: kalın hortum + geniş ağız
 	var vac := Node3D.new()
@@ -181,7 +236,9 @@ func add_look(v: Vector2) -> void:
 
 
 func nozzle_position() -> Vector3:
-	return tool_root.global_position - camera.global_basis.z * 0.6 + camera.global_basis.y * 0.04
+	if nozzle_marker != null:
+		return nozzle_marker.global_position
+	return tool_root.global_position - camera.global_basis.z * 0.6
 
 
 func set_using(v: bool) -> void:
