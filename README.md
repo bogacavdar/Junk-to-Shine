@@ -1,8 +1,8 @@
 # Junk to Shine
 
-Felaket durumdaki alanları temizleyip çöpten para kazandığın, aletlerini yükselttiğin rahatlatıcı bir temizlik oyunu. Godot 4.3, low-poly 3D.
+Felaket durumdaki alanları temizleyip çöpten para kazandığın, aletlerini yükselttiğin rahatlatıcı bir temizlik oyunu. Godot 4.3, PC (Windows).
 
-**Tarayıcıda oyna:** https://bogacavdar.github.io/Junk-to-Shine/
+**Son Windows sürümünü indir:** https://github.com/bogacavdar/Junk-to-Shine/releases/latest/download/JunkToShine-Windows.zip
 
 ## Kontroller
 - **WASD / ok tuşları:** yürü
@@ -13,4 +13,4 @@ Felaket durumdaki alanları temizleyip çöpten para kazandığın, aletlerini y
 
 ## Geliştirme
 Godot 4.3+ ile `project.godot` dosyasını aç, F5 ile çalıştır.
-`main` dalına her push'ta GitHub Actions oyunu web'e derleyip GitHub Pages'e yayınlar.
+`main` dalına her push'ta GitHub Actions oyunu Windows için derleyip yeni bir GitHub sürümü (release) olarak yayınlar.

@@ -173,7 +173,15 @@ func _build_environment() -> void:
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
 	env.ambient_light_energy = 0.9
-	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	env.tonemap_mode = Environment.TONE_MAPPER_ACES
+	env.ssao_enabled = true
+	env.ssao_radius = 1.2
+	env.ssao_intensity = 1.6
+	env.glow_enabled = true
+	env.glow_intensity = 0.4
+	env.fog_enabled = true
+	env.fog_density = 0.004
+	env.fog_light_color = Color(0.75, 0.8, 0.85)
 	env.adjustment_enabled = true
 	env.adjustment_saturation = 0.75   # alan temizlendikçe artar
 	we.environment = env
@@ -182,6 +190,8 @@ func _build_environment() -> void:
 	sun = DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-55, -35, 0)
 	sun.shadow_enabled = true
+	sun.light_angular_distance = 1.5
+	sun.shadow_blur = 1.5
 	sun.light_energy = 0.85
 	sun.light_color = Color(1.0, 0.92, 0.82)
 	add_child(sun)
