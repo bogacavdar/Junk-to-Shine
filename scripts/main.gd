@@ -563,15 +563,15 @@ func _process(delta: float) -> void:
 func _physics_process(_delta: float) -> void:
 	var ppos := player.global_position
 	var full := bag >= bag_capacity()
-	for body in trash_bodies.duplicate():
+	for body: RigidBody3D in trash_bodies.duplicate():
 		if not is_instance_valid(body):
 			trash_bodies.erase(body)
 			continue
 		if full:
 			continue
-		var to_player := ppos - body.global_position
+		var to_player: Vector3 = ppos - body.global_position
 		to_player.y = 0.0
-		var dist := to_player.length()
+		var dist: float = to_player.length()
 		if dist < pickup_radius():
 			_collect_trash(body)
 			full = bag >= bag_capacity()
