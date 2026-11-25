@@ -4,6 +4,18 @@ extends Node3D
 
 const PlayerScript := preload("res://scripts/player.gd")
 const DirtShader := preload("res://shaders/dirt.gdshader")
+const Models := preload("res://scripts/models.gd")
+
+# Çöp türleri: [dosya, boyut (m), değer, sıklık]
+const TRASH_TYPES := [
+	["Lata", 0.32, 3, 3], ["CrushedBottle", 0.42, 3, 3], ["EmptyBottle", 0.5, 4, 2],
+	["FlatBottle", 0.45, 3, 2], ["TwistedBottle", 0.5, 4, 2], ["DwarfBottle", 0.38, 3, 2],
+	["NormalRed", 0.45, 3, 2], ["Platano", 0.38, 2, 2], ["RottenApple", 0.3, 2, 2],
+	["Sandwich", 0.4, 2, 1], ["Tissue1", 0.32, 1, 2], ["Tissue2", 0.32, 1, 2],
+	["StripedBox", 0.65, 5, 2], ["BolsaA", 0.85, 6, 1], ["BolsaN1", 0.85, 6, 1],
+	["BolsaN2", 0.85, 6, 1], ["BolsaNa", 0.85, 6, 1], ["Bag_Box", 1.1, 10, 1],
+	["Box_Bottles", 1.0, 9, 1],
+]
 
 const AREA_SIZE := 40.0          # temizlenecek alanın kenarı (metre)
 const MASK_RES := 256            # kir maskesi çözünürlüğü
@@ -66,6 +78,8 @@ var ring_mat: StandardMaterial3D
 var container_pos := Vector3(-AREA_SIZE * 0.5 + 3.5, 0, AREA_SIZE * 0.5 - 3.5)
 var trash_bodies: Array[RigidBody3D] = []
 var tree_positions: Array[Vector3] = []
+var trash_pool: Array = []
+var flower_nodes: Array[Node3D] = []
 
 # --- Yapraklar (binlerce, fizik yok) ---
 var leaf_mm: MultiMeshInstance3D
@@ -211,59 +225,82 @@ func _build_ground() -> void:
 
 func _build_props() -> void:
 	var half := AREA_SIZE * 0.5
-	var wood := Color(0.55, 0.38, 0.22)
-	# Çit (alanın sınırı)
-	_add_static_box(Vector3(0, 0.45, -half), Vector3(AREA_SIZE, 0.9, 0.3), wood)
-	_add_static_box(Vector3(0, 0.45, half), Vector3(AREA_SIZE, 0.9, 0.3), wood)
-	_add_static_box(Vector3(-half, 0.45, 0), Vector3(0.3, 0.9, AREA_SIZE), wood)
-	_add_static_box(Vector3(half, 0.45, 0), Vector3(0.3, 0.9, AREA_SIZE), wood)
+	# Görünmez sınır duvarları (çarpışma için); görüntü Kenney çitleriyle
+	_add_wall(Vector3(0, 0.6, -half), Vector3(AREA_SIZE, 1.2, 0.3))
+	_add_wall(Vector3(0, 0.6, half), Vector3(AREA_SIZE, 1.2, 0.3))
+	_add_wall(Vector3(-half, 0.6, 0), Vector3(0.3, 1.2, AREA_SIZE))
+	_add_wall(Vector3(half, 0.6, 0), Vector3(0.3, 1.2, AREA_SIZE))
+	var seg := 2.0
+	var count := int(AREA_SIZE / seg)
+	for i in count:
+		var along := -half + seg * (i + 0.5)
+		_add_model("res://assets/nature/fence_planks.glb", seg, Vector3(along, 0, -half), 0.0)
+		_add_model("res://assets/nature/fence_planks.glb", seg, Vector3(along, 0, half), 0.0)
+		_add_model("res://assets/nature/fence_planks.glb", seg, Vector3(-half, 0, along), 90.0)
+		_add_model("res://assets/nature/fence_planks.glb", seg, Vector3(half, 0, along), 90.0)
 
-	# Ev (alanın dışında, arkada)
-	_add_static_box(Vector3(-6, 2.0, -half - 5), Vector3(9, 4, 6), Color(0.85, 0.78, 0.65))
-	var roof := MeshInstance3D.new()
-	var prism := PrismMesh.new()
-	prism.size = Vector3(10, 2.6, 7)
-	prism.material = _mat(Color(0.65, 0.25, 0.2))
-	roof.mesh = prism
-	roof.position = Vector3(-6, 5.3, -half - 5)
-	add_child(roof)
+	# Arkada banliyö evleri
+	var houses := ["building-type-a", "building-type-f", "building-type-c", "building-type-k"]
+	for i in houses.size():
+		var hx := -18.0 + 13.0 * i
+		_add_model("res://assets/suburb/%s.glb" % houses[i], 11.0, Vector3(hx, 0, -half - 9.0), 0.0, true)
+		_add_wall(Vector3(hx, 2.5, -half - 9.0), Vector3(9, 5, 8))
+	_add_model("res://assets/suburb/driveway-long.glb", 6.0, Vector3(-11.5, 0.01, -half - 3.5), 90.0)
 
-	# Ağaçlar (alanın içinde)
+	# Alanın içindeki ağaçlar (sonbahar: yaprakların kaynağı)
 	for p in [Vector3(9, 0, -8), Vector3(-11, 0, -4), Vector3(13, 0, 10)]:
-		_add_tree(p)
-	for p in [Vector3(-26, 0, 6), Vector3(26, 0, -10), Vector3(24, 0, 16), Vector3(8, 0, -28)]:
-		_add_tree(p)
+		_add_tree(p, "res://assets/nature/tree_oak_fall.glb", 6.0)
+	# İçeride birkaç kütük ve çalı
+	_add_model("res://assets/nature/stump_old.glb", 1.2, Vector3(-4, 0, 9), randf() * 360.0)
+	_add_model("res://assets/nature/log.glb", 2.2, Vector3(15, 0, -15), 30.0)
+	_add_model("res://assets/nature/plant_bushLarge.glb", 2.0, Vector3(-17, 0, -17), 0.0)
+	_add_model("res://assets/nature/plant_bush.glb", 1.6, Vector3(17.5, 0, 3), 0.0)
+
+	# Dışarıdaki doğa: ağaç halkası, çalılar, kayalar, çimen
+	var outer_trees := ["res://assets/nature/tree_oak.glb", "res://assets/nature/tree_default.glb", "res://assets/nature/tree_fat.glb", "res://assets/nature/tree_detailed.glb", "res://assets/suburb/tree-large.glb"]
+	var placed := 0
+	var tries := 0
+	while placed < 26 and tries < 400:
+		tries += 1
+		var p := Vector3(randf_range(-36, 36), 0, randf_range(-20, 36))
+		if absf(p.x) < half + 2.5 and absf(p.z) < half + 2.5:
+			continue
+		if p.z < -half - 2.0:
+			continue
+		_add_tree(p, outer_trees[randi() % outer_trees.size()], randf_range(5.0, 7.5))
+		placed += 1
+	var small := ["res://assets/nature/plant_bush.glb", "res://assets/nature/plant_bushDetailed.glb", "res://assets/nature/rock_smallA.glb", "res://assets/nature/rock_smallC.glb", "res://assets/nature/rock_largeA.glb", "res://assets/nature/grass_large.glb", "res://assets/nature/grass.glb", "res://assets/nature/grass_leafs.glb"]
+	for i in 140:
+		var p := Vector3(randf_range(-45, 45), 0, randf_range(-45, 45))
+		if absf(p.x) < half + 0.8 and absf(p.z) < half + 0.8:
+			continue
+		var path: String = small[randi() % small.size()]
+		var size: float = 1.4 if path.contains("bush") else (1.2 if path.contains("large") else 0.7)
+		var deco := _add_model(path, size * randf_range(0.8, 1.3), p, randf() * 360.0)
+		Models.set_shadows(deco, false)
+
+	# Alan tertemiz olunca açacak çiçekler (başta gizli)
+	var flowers := ["res://assets/nature/flower_redA.glb", "res://assets/nature/flower_yellowA.glb", "res://assets/nature/flower_purpleA.glb"]
+	for i in 45:
+		var p := Vector3(randf_range(-half + 1.5, half - 1.5), 0, randf_range(-half + 1.5, half - 1.5))
+		var f := _add_model(flowers[randi() % flowers.size()], randf_range(0.6, 0.9), p, randf() * 360.0)
+		f.set_meta("full_scale", f.scale)
+		f.scale = Vector3.ZERO
+		f.visible = false
+		flower_nodes.append(f)
 
 
-func _add_tree(pos: Vector3) -> void:
-	tree_positions.append(pos)
+func _add_tree(pos: Vector3, path: String, height: float) -> void:
+	if absf(pos.x) < AREA_SIZE * 0.5 and absf(pos.z) < AREA_SIZE * 0.5:
+		tree_positions.append(pos)
 	var body := StaticBody3D.new()
 	body.position = pos
-	var trunk := CylinderMesh.new()
-	trunk.top_radius = 0.15
-	trunk.bottom_radius = 0.22
-	trunk.height = 1.4
-	trunk.radial_segments = 6
-	trunk.material = _mat(Color(0.42, 0.28, 0.16))
-	_add_child_mesh(body, trunk, Vector3(0, 0.7, 0))
-	var leaf_mat := _mat(Color(0.25, 0.5, 0.22))
-	var cone1 := CylinderMesh.new()
-	cone1.top_radius = 0.0
-	cone1.bottom_radius = 1.4
-	cone1.height = 2.0
-	cone1.radial_segments = 6
-	cone1.material = leaf_mat
-	_add_child_mesh(body, cone1, Vector3(0, 2.2, 0))
-	var cone2 := CylinderMesh.new()
-	cone2.top_radius = 0.0
-	cone2.bottom_radius = 1.05
-	cone2.height = 1.6
-	cone2.radial_segments = 6
-	cone2.material = leaf_mat
-	_add_child_mesh(body, cone2, Vector3(0, 3.2, 0))
+	var model := Models.make(path, height, true)
+	model.rotation_degrees.y = randf() * 360.0
+	body.add_child(model)
 	var cs := CollisionShape3D.new()
 	var shape := CylinderShape3D.new()
-	shape.radius = 0.3
+	shape.radius = 0.35
 	shape.height = 2.0
 	cs.shape = shape
 	cs.position.y = 1.0
@@ -271,15 +308,45 @@ func _add_tree(pos: Vector3) -> void:
 	add_child(body)
 
 
+func _add_model(path: String, size: float, pos: Vector3, yaw_deg: float, by_height: bool = false) -> Node3D:
+	var model := Models.make(path, size, by_height)
+	model.position = pos
+	model.rotation_degrees.y = yaw_deg
+	add_child(model)
+	return model
+
+
+func _add_wall(pos: Vector3, size: Vector3) -> void:
+	var body := StaticBody3D.new()
+	body.position = pos
+	var cs := CollisionShape3D.new()
+	var sh := BoxShape3D.new()
+	sh.size = size
+	cs.shape = sh
+	body.add_child(cs)
+	add_child(body)
+
+
 func _build_container() -> void:
-	_add_static_box(container_pos + Vector3(0, 0.7, 0), Vector3(2.6, 1.4, 1.7), Color(0.15, 0.55, 0.3))
+	# Satış noktası: büyük çöp konteyneri
+	var dumpster := _add_model("res://assets/trash/Dumpster.fbx", 3.0, container_pos, 0.0)
+	var dims: Vector3 = dumpster.get_meta("dims")
+	_add_wall(container_pos + Vector3(0, dims.y * 0.5, 0), dims)
+	# Yanında renkli geri dönüşüm kovaları (dekor)
+	var bins := ["PlasticGreen", "PlasticBlue", "PlasticGray"]
+	for i in bins.size():
+		var bp := container_pos + Vector3(-0.6 + 1.0 * i, 0, -2.4)
+		var b := _add_model("res://assets/trash/%s.fbx" % bins[i], 1.1, bp, 0.0, true)
+		var bd: Vector3 = b.get_meta("dims")
+		_add_wall(bp + Vector3(0, bd.y * 0.5, 0), bd)
 	var lbl := Label3D.new()
 	lbl.text = "SAT"
 	lbl.font_size = 96
 	lbl.outline_size = 16
 	lbl.pixel_size = 0.01
 	lbl.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	lbl.position = container_pos + Vector3(0, 2.4, 0)
+	lbl.modulate = Color(0.6, 1.0, 0.7)
+	lbl.position = container_pos + Vector3(0, dims.y + 1.0, 0)
 	add_child(lbl)
 
 
@@ -316,71 +383,33 @@ func _spawn_all_trash() -> void:
 
 
 func _spawn_trash(pos: Vector3) -> void:
+	if trash_pool.is_empty():
+		for t in TRASH_TYPES:
+			for k in int(t[3]):
+				trash_pool.append(t)
+	var t: Array = trash_pool[randi() % trash_pool.size()]
+	var size: float = t[1]
 	var body := RigidBody3D.new()
 	body.collision_layer = 2
 	body.collision_mask = 1 | 2
 	body.mass = 0.5
-	var mi := MeshInstance3D.new()
-	mi.name = "Mesh"
-	var shape_size := Vector3(0.4, 0.4, 0.4)
-	var value := 3
-	var roll := randf()
-	if roll < 0.3:
-		var can := CylinderMesh.new()
-		can.top_radius = 0.13
-		can.bottom_radius = 0.13
-		can.height = 0.32
-		can.radial_segments = 8
-		can.material = _mat(Color(0.8, 0.15, 0.15), 0.35)
-		mi.mesh = can
-		shape_size = Vector3(0.26, 0.32, 0.26)
-		value = 3
-	elif roll < 0.55:
-		var bottle := CylinderMesh.new()
-		bottle.top_radius = 0.06
-		bottle.bottom_radius = 0.12
-		bottle.height = 0.5
-		bottle.radial_segments = 8
-		bottle.material = _mat(Color(0.2, 0.6, 0.35), 0.2)
-		mi.mesh = bottle
-		shape_size = Vector3(0.24, 0.5, 0.24)
-		value = 4
-	elif roll < 0.8:
-		var box := BoxMesh.new()
-		box.size = Vector3(0.55, 0.4, 0.45)
-		box.material = _mat(Color(0.7, 0.55, 0.35))
-		mi.mesh = box
-		shape_size = box.size
-		value = 5
-	elif roll < 0.95:
-		var sack := SphereMesh.new()
-		sack.radius = 0.32
-		sack.height = 0.55
-		sack.radial_segments = 6
-		sack.rings = 3
-		sack.material = _mat(Color(0.12, 0.12, 0.14), 0.4)
-		mi.mesh = sack
-		shape_size = Vector3(0.6, 0.5, 0.6)
-		value = 6
-	else:
-		var tire := TorusMesh.new()
-		tire.inner_radius = 0.22
-		tire.outer_radius = 0.45
-		tire.rings = 10
-		tire.ring_segments = 6
-		tire.material = _mat(Color(0.1, 0.1, 0.1))
-		mi.mesh = tire
-		shape_size = Vector3(0.9, 0.25, 0.9)
-		value = 12
+	var model := Models.make("res://assets/trash/%s.fbx" % t[0], size)
+	model.name = "Mesh"
+	var dims: Vector3 = model.get_meta("dims")
+	model.position.y = -dims.y * 0.5
+	Models.set_shadows(model, size >= 0.7)
 	var cs := CollisionShape3D.new()
 	var bs := BoxShape3D.new()
-	bs.size = shape_size
+	bs.size = Vector3(maxf(dims.x, 0.12), maxf(dims.y, 0.08), maxf(dims.z, 0.12))
 	cs.shape = bs
-	body.add_child(mi)
+	body.add_child(model)
 	body.add_child(cs)
-	body.set_meta("value", value)
-	body.position = pos
-	body.rotation = Vector3(randf() * TAU, randf() * TAU, randf() * TAU)
+	body.set_meta("value", int(t[2]))
+	body.position = pos + Vector3(0, dims.y * 0.5 + 0.3, 0)
+	if size < 0.7:
+		body.rotation = Vector3(randf() * TAU, randf() * TAU, randf() * TAU)
+	else:
+		body.rotation = Vector3(0, randf() * TAU, 0)
 	add_child(body)
 	trash_bodies.append(body)
 
@@ -819,6 +848,8 @@ func _update_progress() -> void:
 	if not completed and clean_pct >= COMPLETE_PCT and trash_bodies.is_empty():
 		completed = true
 		_sweep_leftovers()
+		_bloom_flowers()
+		player.cheer()
 		money += COMPLETE_BONUS
 		banner_label.text = "ALAN TERTEMİZ!  +%d" % COMPLETE_BONUS
 		banner_label.visible = true
@@ -836,6 +867,17 @@ func _sweep_leftovers() -> void:
 	leaves_left = 0
 	for step in 5:
 		get_tree().create_timer(0.15 * (step + 1)).timeout.connect(_fade_mask_step.bind(step == 4))
+
+
+func _bloom_flowers() -> void:
+	# Temizlenen alanda çiçekler tek tek açar
+	for i in flower_nodes.size():
+		var f: Node3D = flower_nodes[i]
+		var full: Vector3 = f.get_meta("full_scale")
+		var tw := create_tween()
+		tw.tween_interval(0.6 + 0.04 * i)
+		tw.tween_callback(f.show)
+		tw.tween_property(f, "scale", full, 0.35).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 
 func _fade_mask_step(final: bool) -> void:

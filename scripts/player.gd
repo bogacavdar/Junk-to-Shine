@@ -4,6 +4,11 @@ extends CharacterBody3D
 var speed := 7.5
 var visual: Node3D
 var tool_nodes: Array[Node3D] = []
+var character: Node3D
+var anim: AnimationPlayer
+var cheering := false
+
+const Models := preload("res://scripts/models.gd")
 
 
 func _ready() -> void:
@@ -22,38 +27,27 @@ func _ready() -> void:
 	visual.name = "Visual"
 	add_child(visual)
 
-	# Gövde (tulum)
-	var body_mesh := CapsuleMesh.new()
-	body_mesh.radius = 0.35
-	body_mesh.height = 1.3
-	body_mesh.radial_segments = 8
-	body_mesh.rings = 2
-	body_mesh.material = _mat(Color(0.2, 0.45, 0.8))
-	_add_mesh(body_mesh, Vector3(0, 0.75, 0))
-
-	# Kafa
-	var head := SphereMesh.new()
-	head.radius = 0.26
-	head.height = 0.52
-	head.radial_segments = 8
-	head.rings = 4
-	head.material = _mat(Color(0.96, 0.78, 0.62))
-	_add_mesh(head, Vector3(0, 1.65, 0))
-
-	# Kep
-	var cap_mesh := CylinderMesh.new()
-	cap_mesh.top_radius = 0.24
-	cap_mesh.bottom_radius = 0.28
-	cap_mesh.height = 0.14
-	cap_mesh.radial_segments = 8
-	cap_mesh.material = _mat(Color(1.0, 0.75, 0.1))
-	_add_mesh(cap_mesh, Vector3(0, 1.86, 0))
+	# Karakter modeli: KayKit Rogue (silah ve pelerin gizli), +Z'ye baktığı için 180° çevrilir
+	character = Models.make("res://assets/character/Rogue.glb", 1.85, true)
+	character.rotation_degrees.y = 180.0
+	visual.add_child(character)
+	for part in ["Knife_Offhand", "1H_Crossbow", "2H_Crossbow", "Knife", "Throwable", "Rogue_Cape"]:
+		var n := character.find_child(part, true, false)
+		if n is Node3D:
+			(n as Node3D).visible = false
+	var ap := character.find_child("AnimationPlayer", true, false)
+	if ap is AnimationPlayer:
+		anim = ap as AnimationPlayer
+		for loop_name in ["Idle", "Running_A", "Walking_A"]:
+			if anim.has_animation(loop_name):
+				anim.get_animation(loop_name).loop_mode = Animation.LOOP_LINEAR
+		_play("Idle")
 
 	# Sırt tankı
 	var tank := BoxMesh.new()
-	tank.size = Vector3(0.45, 0.6, 0.25)
+	tank.size = Vector3(0.4, 0.5, 0.22)
 	tank.material = _mat(Color(1.0, 0.75, 0.1))
-	_add_mesh(tank, Vector3(0, 1.0, 0.38))
+	_add_mesh(tank, Vector3(0, 1.05, 0.32))
 
 	# Yıkama tabancası (ileri, -Z yönüne bakar)
 	var gun := CylinderMesh.new()
@@ -111,6 +105,24 @@ func _physics_process(delta: float) -> void:
 	else:
 		velocity.y -= 25.0 * delta
 	move_and_slide()
+	if not cheering:
+		_play("Running_A" if input.length() > 0.1 else "Idle")
+
+
+func _play(anim_name: String) -> void:
+	if anim == null or not anim.has_animation(anim_name):
+		return
+	if anim.current_animation != anim_name:
+		anim.play(anim_name, 0.15)
+
+
+func cheer() -> void:
+	if anim == null or not anim.has_animation("Cheer"):
+		return
+	cheering = true
+	anim.play("Cheer", 0.15)
+	await anim.animation_finished
+	cheering = false
 
 
 func set_tool(t: int) -> void:
