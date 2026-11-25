@@ -3,7 +3,7 @@ extends Node3D
 ## Döngü: yıka / yaprak temizle / çöp topla -> konteynerde sat -> 1/2/3 ile yükselt.
 
 const PlayerScript := preload("res://scripts/player.gd")
-const DirtShader := preload("res://shaders/dirt.gdshader")
+const IslandScript := preload("res://scripts/island.gd")
 const Models := preload("res://scripts/models.gd")
 
 # Çöp türleri: [dosya, boyut (m), değer, sıklık, renk (dokusu eksik olanlar için, yoksa null)]
@@ -29,7 +29,6 @@ const TRASH_TYPES := [
 	["Box_Bottles", 1.4, 9, 1, null],
 ]
 
-const AREA_SIZE := 40.0          # temizlenecek alanın kenarı (metre)
 const MASK_RES := 256            # kir maskesi çözünürlüğü
 const CLEAN_THRESHOLD := 40      # bu değerin altındaki piksel "temiz" sayılır (0-255)
 const PIXELS_PER_COIN := 25      # kaç temiz piksel = 1 para
@@ -65,12 +64,11 @@ var bag := 0
 var bag_value := 0
 
 # --- Kir maskesi ---
-var mask_data := PackedByteArray()
-var mask_image: Image
-var mask_texture: ImageTexture
-var ground_material: ShaderMaterial
-var dirty_pixel_total := 0
-var clean_pixel_count := 0
+var island = null   # island.gd
+var spawn_point := Vector3.ZERO
+var sky_mat: ShaderMaterial
+var ocean_mat: ShaderMaterial
+var local_clean := 0.0
 var cleaned_since_payout := 0
 var clean_pct := 0.0
 var next_milestone := 25
@@ -86,7 +84,7 @@ var aim_ring: MeshInstance3D
 var spray: CPUParticles3D
 var spray_mat: StandardMaterial3D
 var ring_mat: StandardMaterial3D
-var container_pos := Vector3(-AREA_SIZE * 0.5 + 3.5, 0, AREA_SIZE * 0.5 - 3.5)
+var container_pos := Vector3.ZERO
 var trash_bodies: Array[RigidBody3D] = []
 var tree_positions: Array[Vector3] = []
 var trash_pool: Array = []
@@ -101,11 +99,6 @@ var fullscreen_button: Button
 var autosave_timer := 0.0
 
 # --- Yapraklar (binlerce, fizik yok) ---
-var leaf_data := PackedByteArray()
-var leaf_image: Image
-var leaf_texture: ImageTexture
-var leaf_total := 0
-var leaves_left := 0
 
 # --- Ses ---
 var blip_stream: AudioStreamWAV
@@ -146,11 +139,10 @@ func _ready() -> void:
 	seed(world_seed)
 	_setup_input()
 	_build_environment()
-	_build_ground()
-	_build_props()
+	_build_island()
+	_build_ocean()
 	_build_container()
 	_build_player()
-	_build_leaves()
 	_place_finds()
 	randomize()
 	_build_tool_visuals()
@@ -242,8 +234,16 @@ func _build_environment() -> void:
 	env = Environment.new()
 	env.background_mode = Environment.BG_SKY
 	var sky := Sky.new()
-	var sky_mat := PanoramaSkyMaterial.new()
-	sky_mat.panorama = load("res://assets/textures/sky_garden.hdr")
+	sky_mat = ShaderMaterial.new()
+	sky_mat.shader = load("res://shaders/sky_blend.gdshader")
+	var tex := "res://assets/textures/"
+	# Ayrı kasvetli / güneşli HDRI'ler varsa onları kullan, yoksa bahçe gökyüzünü soldurarak kasvetli yap
+	var sunny_path := tex + "sky_sunny.hdr" if ResourceLoader.exists(tex + "sky_sunny.hdr") else tex + "sky_garden.hdr"
+	var gloomy_path := tex + "sky_gloomy.hdr" if ResourceLoader.exists(tex + "sky_gloomy.hdr") else tex + "sky_garden.hdr"
+	sky_mat.set_shader_parameter("sky_sunny", load(sunny_path))
+	sky_mat.set_shader_parameter("sky_gloomy", load(gloomy_path))
+	sky_mat.set_shader_parameter("gloomy_desaturate", 0.0 if gloomy_path != sunny_path else 0.85)
+	sky_mat.set_shader_parameter("gloomy_energy", 0.9 if gloomy_path != sunny_path else 0.55)
 	sky.sky_material = sky_mat
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
@@ -256,122 +256,82 @@ func _build_environment() -> void:
 	env.glow_enabled = true
 	env.glow_intensity = 0.4
 	env.fog_enabled = true
-	env.fog_density = 0.004
-	env.fog_light_color = Color(0.75, 0.8, 0.85)
+	env.fog_density = 0.012
+	env.fog_light_color = Color(0.55, 0.58, 0.62)
+	env.fog_aerial_perspective = 0.6
 	env.adjustment_enabled = true
-	env.adjustment_saturation = 0.85   # alan temizlendikçe artar
+	env.adjustment_saturation = 0.7
 	we.environment = env
 	add_child(we)
 
 	sun = DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-55, -35, 0)
+	sun.rotation_degrees = Vector3(-50, -35, 0)
 	sun.shadow_enabled = true
 	sun.light_angular_distance = 1.5
 	sun.shadow_blur = 1.5
-	sun.light_energy = 1.1
-	sun.light_color = Color(1.0, 0.92, 0.82)
+	sun.directional_shadow_max_distance = 120.0
+	sun.light_energy = 0.6
+	sun.light_color = Color(0.85, 0.88, 0.95)
 	add_child(sun)
 
 
-func _build_ground() -> void:
-	# Çevredeki çimen (temizlenmez)
-	var grass := MeshInstance3D.new()
-	var gm := PlaneMesh.new()
-	gm.size = Vector2(140, 140)
-	gm.material = _tex_mat("leaves_forest_ground", 2.0)
-	grass.mesh = gm
-	grass.position.y = -0.02
-	add_child(grass)
-
-	# Kir maskesi: gürültüyle farklı yoğunlukta kir
-	mask_data.resize(MASK_RES * MASK_RES)
-	var noise := FastNoiseLite.new()
-	noise.seed = randi()
-	noise.frequency = 0.025
-	for y in MASK_RES:
-		for x in MASK_RES:
-			var n := noise.get_noise_2d(x, y)
-			var v := int(clampf(205.0 + n * 100.0, 130.0, 255.0))
-			mask_data[y * MASK_RES + x] = v
-			if v >= CLEAN_THRESHOLD:
-				dirty_pixel_total += 1
-	mask_image = Image.create_from_data(MASK_RES, MASK_RES, false, Image.FORMAT_L8, mask_data)
-	mask_texture = ImageTexture.create_from_image(mask_image)
-
-	ground_material = ShaderMaterial.new()
-	ground_material.shader = DirtShader
-	ground_material.set_shader_parameter("dirt_mask", mask_texture)
-	ground_material.set_shader_parameter("area_size", AREA_SIZE)
+func _build_island() -> void:
 	var tex := "res://assets/textures/"
-	ground_material.set_shader_parameter("clean_albedo", load(tex + "square_concrete_pavers_diff.jpg"))
-	ground_material.set_shader_parameter("clean_normal", load(tex + "square_concrete_pavers_nor.jpg"))
-	ground_material.set_shader_parameter("clean_rough", load(tex + "square_concrete_pavers_rough.png"))
-	ground_material.set_shader_parameter("mud_albedo", load(tex + "brown_mud_leaves_01_diff.jpg"))
-	ground_material.set_shader_parameter("mud_normal", load(tex + "brown_mud_leaves_01_nor.jpg"))
-	ground_material.set_shader_parameter("soil_albedo", load(tex + "dirt_floor_diff.jpg"))
-	ground_material.set_shader_parameter("soil_normal", load(tex + "dirt_floor_nor.jpg"))
-	ground_material.set_shader_parameter("soil_rough", load(tex + "dirt_floor_rough.png"))
+	var t := {}
+	# Zemin dokuları: yeni indirilenler varsa onları, yoksa geçici olarak mevcutları kullan
+	var has_sand := ResourceLoader.exists(tex + "sand_03_diff.jpg")
+	var has_ground := ResourceLoader.exists(tex + "coast_sand_rocks_02_diff.jpg")
+	var has_rock := ResourceLoader.exists(tex + "rocks_ground_02_diff.jpg")
+	t["sand_albedo"] = load(tex + ("sand_03" if has_sand else "dirt_floor") + "_diff.jpg")
+	t["sand_normal"] = load(tex + ("sand_03" if has_sand else "dirt_floor") + "_nor.jpg")
+	t["sand_tint"] = Vector3.ONE if has_sand else Vector3(1.55, 1.35, 1.05)
+	t["ground_albedo"] = load(tex + ("coast_sand_rocks_02" if has_ground else "dirt_floor") + "_diff.jpg")
+	t["ground_normal"] = load(tex + ("coast_sand_rocks_02" if has_ground else "dirt_floor") + "_nor.jpg")
+	t["ground_tint"] = Vector3.ONE if has_ground else Vector3(0.85, 0.95, 0.7)
+	t["ground_tile"] = 15.0 if has_ground else 4.0
+	t["rock_albedo"] = load(tex + ("rocks_ground_02" if has_rock else "square_concrete_pavers") + "_diff.jpg")
+	t["rock_normal"] = load(tex + ("rocks_ground_02" if has_rock else "square_concrete_pavers") + "_nor.jpg")
+	t["mud_albedo"] = load(tex + "brown_mud_leaves_01_diff.jpg")
+	t["mud_normal"] = load(tex + "brown_mud_leaves_01_nor.jpg")
+	t["leaf_albedo"] = load(tex + "leaves_forest_ground_diff.jpg")
+	t["leaf_normal"] = load(tex + "leaves_forest_ground_nor.jpg")
+	t["leaf_height"] = load(tex + "leaves_forest_ground_disp.png")
+	island = IslandScript.new()
+	add_child(island)
+	island.setup(world_seed, load("res://shaders/terrain.gdshader"), t)
 
-	var ground := MeshInstance3D.new()
+	# Başlangıç: güney kıyısında kumsalın bittiği yer
+	var z := 330.0
+	while z > 0.0 and island.height_at(0.0, z) < 1.8:
+		z -= 1.0
+	spawn_point = Vector3(0.0, island.height_at(0.0, z - 4.0), z - 4.0)
+	container_pos = Vector3(7.0, 0.0, spawn_point.z - 2.0)
+	container_pos.y = island.height_at(container_pos.x, container_pos.z)
+
+
+func _build_ocean() -> void:
+	var sea := MeshInstance3D.new()
 	var pm := PlaneMesh.new()
-	pm.size = Vector2(AREA_SIZE, AREA_SIZE)
-	pm.material = ground_material
-	ground.mesh = pm
-	add_child(ground)
-
-	# Zemin çarpışması
-	var floor_body := StaticBody3D.new()
-	var cs := CollisionShape3D.new()
-	var bs := BoxShape3D.new()
-	bs.size = Vector3(140, 1, 140)
-	cs.shape = bs
-	cs.position.y = -0.5
-	floor_body.add_child(cs)
-	add_child(floor_body)
-
-
-func _build_props() -> void:
-	# Kapalı arka bahçe: kuzeyde evin arka duvarı, doğu/batıda tuğla bahçe duvarı, güneyde ahşap çit.
-	# Duvarların ötesini gökyüzü HDRI'si (bahçe, ağaçlar) doldurur.
-	var half := AREA_SIZE * 0.5
-	var plaster := _tex_mat("beige_wall_001", 3.0)
-	var brick := _tex_mat("red_bricks_04", 2.5)
-	var wood := _tex_mat("wooden_gate", 1.9, 0.6, false)
-	var dark := StandardMaterial3D.new()
-	dark.albedo_color = Color(0.22, 0.22, 0.24)
-	dark.roughness = 0.7
-	var white := StandardMaterial3D.new()
-	white.albedo_color = Color(0.92, 0.92, 0.9)
-	white.roughness = 0.5
-	var glass := StandardMaterial3D.new()
-	glass.albedo_color = Color(0.05, 0.07, 0.1)
-	glass.metallic = 0.85
-	glass.roughness = 0.06
-
-	# Evin arka duvarı (kuzey)
-	_add_solid(Vector3(0, 3.5, -half - 0.2), Vector3(AREA_SIZE + 0.8, 7.0, 0.4), plaster)
-	_add_deco(Vector3(0, 7.1, -half + 0.35), Vector3(AREA_SIZE + 1.2, 0.25, 1.3), dark)       # saçak
-	_add_deco(Vector3(0, 0.2, -half + 0.03), Vector3(AREA_SIZE, 0.4, 0.08), brick)             # tuğla süpürgelik
-	for wx in [-14.0, -6.5, 6.5, 14.0]:
-		_add_deco(Vector3(wx, 2.7, -half + 0.04), Vector3(1.7, 1.5, 0.1), white)                # pencere çerçevesi
-		_add_deco(Vector3(wx, 2.7, -half + 0.08), Vector3(1.5, 1.3, 0.04), glass)               # cam
-		_add_deco(Vector3(wx, 1.9, -half + 0.12), Vector3(1.9, 0.08, 0.2), white)               # denizlik
-	_add_deco(Vector3(0, 1.2, -half + 0.04), Vector3(1.3, 2.4, 0.1), white)                     # kapı kasası
-	_add_deco(Vector3(0, 1.15, -half + 0.08), Vector3(1.1, 2.3, 0.06), wood)                    # kapı
-	_add_solid(Vector3(0, 0.1, -half + 0.6), Vector3(2.2, 0.2, 1.0), _tex_mat("square_concrete_pavers", 2.4))  # basamak
-
-	# Tuğla bahçe duvarları (doğu / batı) ve üst başlık
-	for side in [-1.0, 1.0]:
-		var sx: float = side * (half + 0.15)
-		_add_solid(Vector3(sx, 1.2, 0), Vector3(0.3, 2.4, AREA_SIZE + 0.6), brick)
-		_add_deco(Vector3(sx, 2.45, 0), Vector3(0.42, 0.1, AREA_SIZE + 0.7), plaster)
-
-	# Ahşap çit (güney): tahta yüzey, direkler, üst kuşak
-	_add_solid(Vector3(0, 0.95, half + 0.1), Vector3(AREA_SIZE, 1.9, 0.08), wood)
-	_add_deco(Vector3(0, 1.92, half + 0.1), Vector3(AREA_SIZE, 0.08, 0.14), wood)
-	var posts := int(AREA_SIZE / 2.4)
-	for i in posts + 1:
-		_add_deco(Vector3(-half + i * (AREA_SIZE / posts), 1.0, half + 0.18), Vector3(0.12, 2.0, 0.12), wood)
+	pm.size = Vector2(1600, 1600)
+	pm.subdivide_width = 320
+	pm.subdivide_depth = 320
+	sea.mesh = pm
+	ocean_mat = ShaderMaterial.new()
+	ocean_mat.shader = load("res://shaders/ocean.gdshader")
+	var nt := NoiseTexture2D.new()
+	nt.width = 512
+	nt.height = 512
+	nt.seamless = true
+	nt.as_normal_map = true
+	nt.bump_strength = 6.0
+	var fn := FastNoiseLite.new()
+	fn.frequency = 0.02
+	fn.fractal_octaves = 4
+	nt.noise = fn
+	ocean_mat.set_shader_parameter("detail_normal", nt)
+	sea.material_override = ocean_mat
+	sea.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(sea)
 
 
 ## Dünya koordinatına göre döşenen (triplanar) gerçekçi malzeme
@@ -452,7 +412,7 @@ func _build_container() -> void:
 
 func _build_player() -> void:
 	player = PlayerScript.new()
-	player.position = Vector3(0, 0.1, AREA_SIZE * 0.5 - 5)
+	player.position = spawn_point + Vector3(0, 0.3, 0)
 	add_child(player)
 
 	player.rotation.y = 0.0
@@ -462,20 +422,19 @@ func _build_player() -> void:
 
 
 func _spawn_all_trash() -> void:
-	var half := AREA_SIZE * 0.5 - 1.5
 	var placed := 0
 	var tries := 0
-	while placed < TRASH_COUNT and tries < 2000:
+	while placed < TRASH_COUNT and tries < 4000:
 		tries += 1
-		var p := Vector3(randf_range(-half, half), 0.6, randf_range(-half, half))
-		if p.distance_to(container_pos) < 5.0:
+		var ang := randf() * TAU
+		var dist := sqrt(randf()) * 60.0
+		var x := spawn_point.x + cos(ang) * dist
+		var z := spawn_point.z + sin(ang) * dist
+		var h: float = island.height_at(x, z)
+		if h < 0.4:
 			continue
-		var near_tree := false
-		for t in tree_positions:
-			if Vector2(p.x - t.x, p.z - t.z).length() < 1.2:
-				near_tree = true
-				break
-		if near_tree:
+		var p := Vector3(x, h + 0.4, z)
+		if p.distance_to(container_pos) < 5.0 or p.distance_to(spawn_point) < 3.0:
 			continue
 		_spawn_trash(p)
 		placed += 1
@@ -522,50 +481,6 @@ func _spawn_trash(pos: Vector3, type_index: int = -1, restore_rot = null) -> voi
 		body.rotation = Vector3(0, randf() * TAU, 0)
 	add_child(body)
 	trash_bodies.append(body)
-
-
-func _build_leaves() -> void:
-	# Yaprak döküntüsü: zemindeki ikinci maske (1 = yapraklı). Süpürge bunu temizler.
-	leaf_data.resize(MASK_RES * MASK_RES)
-	var noise := FastNoiseLite.new()
-	noise.seed = randi()
-	noise.frequency = 0.018
-	noise.fractal_octaves = 4
-	leaf_total = 0
-	for y in MASK_RES:
-		for x in MASK_RES:
-			# Duvar diplerinde daha çok yaprak birikir
-			var ex: float = minf(x, MASK_RES - 1 - x) / float(MASK_RES)
-			var ey: float = minf(y, MASK_RES - 1 - y) / float(MASK_RES)
-			var edge: float = clampf(1.0 - minf(ex, ey) * 8.0, 0.0, 1.0)
-			var n := noise.get_noise_2d(x, y) * 0.5 + 0.5
-			var v := clampf((n - 0.42) * 3.2 + edge * 0.8, 0.0, 1.0)
-			var b := int(v * 255.0)
-			leaf_data[y * MASK_RES + x] = b
-			if b >= CLEAN_THRESHOLD:
-				leaf_total += 1
-	leaves_left = leaf_total
-	leaf_image = Image.create_from_data(MASK_RES, MASK_RES, false, Image.FORMAT_L8, leaf_data)
-	leaf_texture = ImageTexture.create_from_image(leaf_image)
-	var tex := "res://assets/textures/"
-	ground_material.set_shader_parameter("leaf_mask", leaf_texture)
-	ground_material.set_shader_parameter("leaf_albedo", load(tex + "leaves_forest_ground_diff.jpg"))
-	ground_material.set_shader_parameter("leaf_normal", load(tex + "leaves_forest_ground_nor.jpg"))
-	ground_material.set_shader_parameter("leaf_rough", load(tex + "leaves_forest_ground_rough.png"))
-	ground_material.set_shader_parameter("leaf_height", load(tex + "leaves_forest_ground_disp.png"))
-
-
-func _count_leaves() -> void:
-	leaves_left = 0
-	for i in leaf_data.size():
-		if leaf_data[i] >= CLEAN_THRESHOLD:
-			leaves_left += 1
-
-
-func _refresh_leaf_texture() -> void:
-	leaf_image.set_data(MASK_RES, MASK_RES, false, Image.FORMAT_L8, leaf_data)
-	leaf_texture.update(leaf_image)
-
 
 
 func _build_tool_visuals() -> void:
@@ -711,9 +626,8 @@ func _process(delta: float) -> void:
 	var hit: Variant = _aim_ground_point()
 	if hit != null:
 		var h: Vector3 = hit
-		var lim := AREA_SIZE * 0.5 - 0.2
-		if Vector3(h.x - player.global_position.x, 0, h.z - player.global_position.z).length() <= REACH and absf(h.x) < lim and absf(h.z) < lim:
-			aim = Vector3(h.x, 0.0, h.z)
+		if Vector3(h.x - player.global_position.x, 0, h.z - player.global_position.z).length() <= REACH:
+			aim = h
 			aim_valid = true
 
 	var r := tool_radius()
@@ -913,62 +827,15 @@ func _apply_tool_fx() -> void:
 # =====================================================================
 
 func _clean_at(world_pos: Vector3, delta: float) -> void:
-	var u := (world_pos.x + AREA_SIZE * 0.5) / AREA_SIZE
-	var v := (world_pos.z + AREA_SIZE * 0.5) / AREA_SIZE
-	var cx := int(u * MASK_RES)
-	var cy := int(v * MASK_RES)
-	var r_px := maxi(1, int(ceil(washer_radius() / AREA_SIZE * MASK_RES)))
-	var amount := washer_strength() * delta
-	var changed := false
-	for y in range(maxi(cy - r_px, 0), mini(cy + r_px + 1, MASK_RES)):
-		for x in range(maxi(cx - r_px, 0), mini(cx + r_px + 1, MASK_RES)):
-			var dx: int = x - cx
-			var dy: int = y - cy
-			var dist := sqrt(float(dx * dx + dy * dy)) / float(r_px)
-			if dist > 1.0:
-				continue
-			var idx: int = y * MASK_RES + x
-			var old: int = mask_data[idx]
-			if old == 0:
-				continue
-			var falloff := 1.0 - dist * dist
-			var nv := int(maxf(0.0, float(old) - amount * falloff))
-			mask_data[idx] = nv
-			changed = true
-			if old >= CLEAN_THRESHOLD and nv < CLEAN_THRESHOLD:
-				clean_pixel_count += 1
-				cleaned_since_payout += 1
-	if changed:
-		mask_image.set_data(MASK_RES, MASK_RES, false, Image.FORMAT_L8, mask_data)
-		mask_texture.update(mask_image)
+	var n: int = island.clean(world_pos, washer_radius(), washer_strength() * delta, "dirt")
+	if n > 0:
+		cleaned_since_payout += n
 		_check_finds()
 
 
 func _clean_leaves(p: Vector3, radius: float) -> void:
-	var cx := int((p.x / AREA_SIZE + 0.5) * MASK_RES)
-	var cy := int((p.z / AREA_SIZE + 0.5) * MASK_RES)
-	var r_px := maxi(1, int(ceil(radius / AREA_SIZE * MASK_RES)))
-	var amount := (500.0 + 200.0 * (broom_level - 1)) * get_process_delta_time()
-	var changed := false
-	for y in range(maxi(cy - r_px, 0), mini(cy + r_px + 1, MASK_RES)):
-		for x in range(maxi(cx - r_px, 0), mini(cx + r_px + 1, MASK_RES)):
-			var dx: int = x - cx
-			var dy: int = y - cy
-			var dist := sqrt(float(dx * dx + dy * dy)) / float(r_px)
-			if dist > 1.0:
-				continue
-			var idx: int = y * MASK_RES + x
-			var old: int = leaf_data[idx]
-			if old == 0:
-				continue
-			var nv := int(maxf(0.0, float(old) - amount * (1.0 - dist * dist * 0.7)))
-			leaf_data[idx] = nv
-			changed = true
-			if old >= CLEAN_THRESHOLD and nv < CLEAN_THRESHOLD:
-				leaves_left -= 1
-				cleaned_since_payout += 1
-	if changed:
-		_refresh_leaf_texture()
+	var n: int = island.clean(p, radius, (500.0 + 200.0 * (broom_level - 1)) * get_process_delta_time(), "leaf")
+	cleaned_since_payout += n
 
 
 func _collect_trash(body: RigidBody3D) -> void:
@@ -1003,62 +870,32 @@ func _sell() -> void:
 
 
 func _update_progress() -> void:
-	clean_pct = 100.0 * float(clean_pixel_count) / float(maxi(1, dirty_pixel_total))
-	var t := clampf(clean_pct / 100.0, 0.0, 1.0)
-	env.adjustment_saturation = lerpf(0.85, 1.08, t)
-	sun.light_energy = lerpf(1.0, 1.2, t)
-
-	if clean_pct >= float(next_milestone) and next_milestone < 100:
-		_float_text(player.global_position + Vector3(0, 2.6, 0), "%%%d temiz!" % next_milestone, Color(0.6, 1.0, 0.8))
-		_play_blip(coin_stream, 0.8, -4.0)
-		next_milestone += 25
-
-	# %90'dan sonra kalan lekeler belirgin şekilde parlar
-	ground_material.set_shader_parameter("hint", 1.0 if clean_pct >= 90.0 and not completed else 0.0)
-
-	if not completed and clean_pct >= COMPLETE_PCT and trash_bodies.is_empty() and leaves_left <= int(leaf_total * 0.02):
-		completed = true
-		_sweep_leftovers()
-		_bloom_flowers()
-		player.cheer()
-		money += COMPLETE_BONUS
-		banner_label.text = "ALAN TERTEMİZ!  +%d" % COMPLETE_BONUS
-		banner_label.visible = true
-		spray.emitting = false
-		for i in 8:
-			get_tree().create_timer(0.08 * i).timeout.connect(_play_blip.bind(coin_stream, 0.8 + i * 0.1, -4.0))
-
-
-func _sweep_leftovers() -> void:
-	# Son kırıntılar: kalan kir 5 adımda parlayarak silinir, kalan yapraklar kaybolur
-	for i in leaf_data.size():
-		leaf_data[i] = 0
-	_refresh_leaf_texture()
-	leaves_left = 0
-	for step in 5:
-		get_tree().create_timer(0.15 * (step + 1)).timeout.connect(_fade_mask_step.bind(step == 4))
-
-
-func _bloom_flowers() -> void:
-	# Temizlenen alanda çiçekler tek tek açar
-	for i in flower_nodes.size():
-		var f: Node3D = flower_nodes[i]
-		var full: Vector3 = f.get_meta("full_scale")
-		var tw := create_tween()
-		tw.tween_interval(0.6 + 0.04 * i)
-		tw.tween_callback(f.show)
-		tw.tween_property(f, "scale", full, 0.35).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-
-
-func _fade_mask_step(final: bool) -> void:
-	for i in mask_data.size():
-		var v: int = mask_data[i]
-		if v > 0:
-			mask_data[i] = 0 if final else v / 2
-	mask_image.set_data(MASK_RES, MASK_RES, false, Image.FORMAT_L8, mask_data)
-	mask_texture.update(mask_image)
-	if final:
-		clean_pixel_count = dirty_pixel_total
+	clean_pct = 100.0 * island.clean_fraction()
+	# Etrafın ne kadar temiz? Çevredeki noktalara bak; temizlendikçe gökyüzü, ışık ve deniz açılır
+	var ppos := player.global_position
+	var clean_pts := 0
+	var total_pts := 0
+	for ring in [6.0, 14.0, 24.0]:
+		for k in 8:
+			var a: float = TAU * k / 8.0
+			var p := ppos + Vector3(cos(a) * ring, 0, sin(a) * ring)
+			if island.height_at(p.x, p.z) < 0.3:
+				continue
+			total_pts += 2
+			if island.sample(p, "dirt") < CLEAN_THRESHOLD:
+				clean_pts += 1
+			if island.sample(p, "leaf") < CLEAN_THRESHOLD:
+				clean_pts += 1
+	var target: float = float(clean_pts) / float(maxi(1, total_pts))
+	local_clean = lerpf(local_clean, target, clampf(get_process_delta_time() * 0.6, 0.0, 1.0))
+	var t := smoothstep(0.15, 0.95, local_clean)
+	sky_mat.set_shader_parameter("sunny", t)
+	ocean_mat.set_shader_parameter("gloom", 1.0 - t)
+	env.adjustment_saturation = lerpf(0.7, 1.08, t)
+	env.fog_density = lerpf(0.012, 0.002, t)
+	env.fog_light_color = Color(0.55, 0.58, 0.62).lerp(Color(0.75, 0.82, 0.9), t)
+	sun.light_energy = lerpf(0.6, 1.25, t)
+	sun.light_color = Color(0.85, 0.88, 0.95).lerp(Color(1.0, 0.93, 0.82), t)
 
 
 # =====================================================================
@@ -1142,8 +979,9 @@ func _update_hud() -> void:
 		bag_text += "   ·  DOLU! Konteynere götür"
 	bag_label.text = bag_text
 	progress_bar.value = clean_pct
-	pct_label.text = "Zemin %%%d temiz" % int(clean_pct)
-	count_label.text = "Kalan çöp: %d   ·   Yaprak: %%%d   ·   Buluntu: %d / %d" % [trash_bodies.size(), int(100.0 * leaves_left / maxf(1.0, leaf_total)), found_finds.size(), FINDS.size()]
+	var m2 := float(island.dirt_clean + island.leaf_clean) / 40.96
+	pct_label.text = "Ada: %%%.3f temiz   ·   %s m² temizlendi" % [clean_pct, _fmt(m2)]
+	count_label.text = "Kalan çöp: %d   ·   Buluntu: %d / %d" % [trash_bodies.size(), found_finds.size(), FINDS.size()]
 
 	var vac_text: String = ("Sv %d" % vacuum_level) if vacuum_level > 0 else "kilitli"
 	shop_label.text = "ALETLER\n%s [1] Süpürge  Sv %d\n%s [2] Yıkayıcı  Sv %d\n%s [3] Elk. süpürgesi  %s" % [
@@ -1167,8 +1005,12 @@ func _aim_ground_point() -> Variant:
 	var mp := get_viewport().get_visible_rect().size * 0.5
 	var from := camera.project_ray_origin(mp)
 	var dir := camera.project_ray_normal(mp)
-	var plane := Plane(Vector3.UP, 0.0)
-	return plane.intersects_ray(from, dir)
+	var q := PhysicsRayQueryParameters3D.create(from, from + dir * (REACH + 4.0))
+	q.collision_mask = 1
+	var r := get_world_3d().direct_space_state.intersect_ray(q)
+	if r.is_empty():
+		return null
+	return r["position"]
 
 
 func _float_text(pos: Vector3, text: String, color: Color) -> void:
@@ -1289,9 +1131,17 @@ const FINDS := [
 ]
 
 func _place_finds() -> void:
-	var half := AREA_SIZE * 0.5 - 3.0
-	for i in FINDS.size():
-		find_positions.append(Vector3(randf_range(-half, half), 0, randf_range(-half, half)))
+	var i := 0
+	var tries := 0
+	while i < FINDS.size() and tries < 1000:
+		tries += 1
+		var x := spawn_point.x + randf_range(-55.0, 55.0)
+		var z := spawn_point.z + randf_range(-55.0, 20.0)
+		var h: float = island.height_at(x, z)
+		if h < 0.6:
+			continue
+		find_positions.append(Vector3(x, h, z))
+		i += 1
 
 
 func _check_finds() -> void:
@@ -1299,10 +1149,7 @@ func _check_finds() -> void:
 		if found_finds.has(i):
 			continue
 		var p: Vector3 = find_positions[i]
-		var px := clampi(int((p.x / AREA_SIZE + 0.5) * MASK_RES), 0, MASK_RES - 1)
-		var py := clampi(int((p.z / AREA_SIZE + 0.5) * MASK_RES), 0, MASK_RES - 1)
-		var v: int = mask_data[py * MASK_RES + px]
-		if v < CLEAN_THRESHOLD:
+		if island.sample(p, "dirt") < CLEAN_THRESHOLD:
 			_reveal_find(i)
 
 
@@ -1347,7 +1194,7 @@ func _reveal_find(i: int) -> void:
 # KAYIT
 # =====================================================================
 
-const SAVE_PATH := "user://kayit.json"
+const SAVE_PATH := "user://ada_kayit.json"
 
 func _load_save() -> Dictionary:
 	if not FileAccess.file_exists(SAVE_PATH):
@@ -1375,9 +1222,7 @@ func _save_game() -> void:
 		"washer": washer_level, "broom": broom_level, "vacuum": vacuum_level, "bag_level": bag_level,
 		"bag": bag, "bag_value": bag_value, "tool": current_tool,
 		"completed": completed, "milestone": next_milestone,
-		"clean_pixels": clean_pixel_count,
-		"mask": Marshalls.raw_to_base64(mask_data.compress(FileAccess.COMPRESSION_DEFLATE)),
-		"leaves": Marshalls.raw_to_base64(leaf_data.compress(FileAccess.COMPRESSION_DEFLATE)),
+		"island": island.save_data(),
 		"trash": trash,
 		"finds": found_finds,
 		"player": [player.global_position.x, player.global_position.z],
@@ -1401,24 +1246,8 @@ func _apply_save(d: Dictionary) -> void:
 	current_tool = int(d.get("tool", TOOL_WASHER))
 	completed = bool(d.get("completed", false))
 	next_milestone = int(d.get("milestone", 25))
-	clean_pixel_count = int(d.get("clean_pixels", 0))
 	master_volume = float(d.get("volume", 0.8))
-
-	var packed: PackedByteArray = Marshalls.base64_to_raw(str(d.get("mask", "")))
-	if packed.size() > 0:
-		var raw := packed.decompress(MASK_RES * MASK_RES, FileAccess.COMPRESSION_DEFLATE)
-		if raw.size() == MASK_RES * MASK_RES:
-			mask_data = raw
-			mask_image.set_data(MASK_RES, MASK_RES, false, Image.FORMAT_L8, mask_data)
-			mask_texture.update(mask_image)
-
-	var leaves_packed: PackedByteArray = Marshalls.base64_to_raw(str(d.get("leaves", "")))
-	if leaves_packed.size() > 0:
-		var leaves_raw := leaves_packed.decompress(MASK_RES * MASK_RES, FileAccess.COMPRESSION_DEFLATE)
-		if leaves_raw.size() == MASK_RES * MASK_RES:
-			leaf_data = leaves_raw
-			_refresh_leaf_texture()
-			_count_leaves()
+	island.load_data(d.get("island", {}))
 
 	for item in d.get("trash", []):
 		var a: Array = item
@@ -1429,7 +1258,7 @@ func _apply_save(d: Dictionary) -> void:
 
 	var pp: Array = d.get("player", [])
 	if pp.size() == 2:
-		player.position = Vector3(pp[0], 0.1, pp[1])
+		player.position = Vector3(pp[0], island.height_at(pp[0], pp[1]) + 0.3, pp[1])
 		player.rotation.y = float(d.get("yaw", 0.0))
 
 	if completed:
@@ -1611,3 +1440,12 @@ func _focus_first(root: Node) -> void:
 		_focus_first(c)
 		if get_viewport().gui_get_focus_owner() != null:
 			return
+
+
+## Büyük sayıları okunur yaz: 1.250 / 12,5 B / 3,2 Mn
+func _fmt(v: float) -> String:
+	if v >= 1000000.0:
+		return "%.1f Mn" % (v / 1000000.0)
+	if v >= 10000.0:
+		return "%.1f B" % (v / 1000.0)
+	return str(int(v))
