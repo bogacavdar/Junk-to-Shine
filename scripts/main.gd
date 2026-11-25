@@ -35,7 +35,6 @@ const CLEAN_THRESHOLD := 40      # bu değerin altındaki piksel "temiz" sayıl�
 const PIXELS_PER_COIN := 25      # kaç temiz piksel = 1 para
 const REACH := 5.0               # aletin oyuncudan en uzak erişimi
 const TRASH_COUNT := 70
-const LEAF_COUNT := 1400
 const COMPLETE_PCT := 99.0       # bu orandan sonra kalan kırıntılar otomatik temizlenir
 const COMPLETE_BONUS := 250
 
@@ -102,9 +101,10 @@ var fullscreen_button: Button
 var autosave_timer := 0.0
 
 # --- Yapraklar (binlerce, fizik yok) ---
-var leaf_mm: MultiMeshInstance3D
-var leaf_positions := PackedVector3Array()
-var leaf_alive := PackedByteArray()
+var leaf_data := PackedByteArray()
+var leaf_image: Image
+var leaf_texture: ImageTexture
+var leaf_total := 0
 var leaves_left := 0
 
 # --- Ses ---
@@ -278,7 +278,7 @@ func _build_ground() -> void:
 	var grass := MeshInstance3D.new()
 	var gm := PlaneMesh.new()
 	gm.size = Vector2(140, 140)
-	gm.material = _mat(Color(0.36, 0.55, 0.28))
+	gm.material = _tex_mat("leaves_forest_ground", 2.0)
 	grass.mesh = gm
 	grass.position.y = -0.02
 	add_child(grass)
@@ -331,88 +331,81 @@ func _build_ground() -> void:
 
 
 func _build_props() -> void:
+	# Kapalı arka bahçe: kuzeyde evin arka duvarı, doğu/batıda tuğla bahçe duvarı, güneyde ahşap çit.
+	# Duvarların ötesini gökyüzü HDRI'si (bahçe, ağaçlar) doldurur.
 	var half := AREA_SIZE * 0.5
-	# Görünmez sınır duvarları (çarpışma için); görüntü Kenney çitleriyle
-	_add_wall(Vector3(0, 0.6, -half), Vector3(AREA_SIZE, 1.2, 0.3))
-	_add_wall(Vector3(0, 0.6, half), Vector3(AREA_SIZE, 1.2, 0.3))
-	_add_wall(Vector3(-half, 0.6, 0), Vector3(0.3, 1.2, AREA_SIZE))
-	_add_wall(Vector3(half, 0.6, 0), Vector3(0.3, 1.2, AREA_SIZE))
-	var seg := 2.0
-	var count := int(AREA_SIZE / seg)
-	for i in count:
-		var along := -half + seg * (i + 0.5)
-		_add_model("res://assets/nature/fence_planks.glb", seg, Vector3(along, 0, -half), 0.0)
-		_add_model("res://assets/nature/fence_planks.glb", seg, Vector3(along, 0, half), 0.0)
-		_add_model("res://assets/nature/fence_planks.glb", seg, Vector3(-half, 0, along), 90.0)
-		_add_model("res://assets/nature/fence_planks.glb", seg, Vector3(half, 0, along), 90.0)
+	var plaster := _tex_mat("beige_wall_001", 3.0)
+	var brick := _tex_mat("red_bricks_04", 2.5)
+	var wood := _tex_mat("wooden_gate", 1.9, 0.6, false)
+	var dark := StandardMaterial3D.new()
+	dark.albedo_color = Color(0.22, 0.22, 0.24)
+	dark.roughness = 0.7
+	var white := StandardMaterial3D.new()
+	white.albedo_color = Color(0.92, 0.92, 0.9)
+	white.roughness = 0.5
+	var glass := StandardMaterial3D.new()
+	glass.albedo_color = Color(0.05, 0.07, 0.1)
+	glass.metallic = 0.85
+	glass.roughness = 0.06
 
-	# Arkada banliyö evleri
-	var houses := ["building-type-a", "building-type-f", "building-type-c", "building-type-k"]
-	for i in houses.size():
-		var hx := -18.0 + 13.0 * i
-		_add_model("res://assets/suburb/%s.glb" % houses[i], 11.0, Vector3(hx, 0, -half - 9.0), 0.0, true)
-		_add_wall(Vector3(hx, 2.5, -half - 9.0), Vector3(9, 5, 8))
-	_add_model("res://assets/suburb/driveway-long.glb", 6.0, Vector3(-11.5, 0.01, -half - 3.5), 90.0)
+	# Evin arka duvarı (kuzey)
+	_add_solid(Vector3(0, 3.5, -half - 0.2), Vector3(AREA_SIZE + 0.8, 7.0, 0.4), plaster)
+	_add_deco(Vector3(0, 7.1, -half + 0.35), Vector3(AREA_SIZE + 1.2, 0.25, 1.3), dark)       # saçak
+	_add_deco(Vector3(0, 0.2, -half + 0.03), Vector3(AREA_SIZE, 0.4, 0.08), brick)             # tuğla süpürgelik
+	for wx in [-14.0, -6.5, 6.5, 14.0]:
+		_add_deco(Vector3(wx, 2.7, -half + 0.04), Vector3(1.7, 1.5, 0.1), white)                # pencere çerçevesi
+		_add_deco(Vector3(wx, 2.7, -half + 0.08), Vector3(1.5, 1.3, 0.04), glass)               # cam
+		_add_deco(Vector3(wx, 1.9, -half + 0.12), Vector3(1.9, 0.08, 0.2), white)               # denizlik
+	_add_deco(Vector3(0, 1.2, -half + 0.04), Vector3(1.3, 2.4, 0.1), white)                     # kapı kasası
+	_add_deco(Vector3(0, 1.15, -half + 0.08), Vector3(1.1, 2.3, 0.06), wood)                    # kapı
+	_add_solid(Vector3(0, 0.1, -half + 0.6), Vector3(2.2, 0.2, 1.0), _tex_mat("square_concrete_pavers", 2.4))  # basamak
 
-	# Alanın içindeki ağaçlar (sonbahar: yaprakların kaynağı)
-	for p in [Vector3(9, 0, -8), Vector3(-11, 0, -4), Vector3(13, 0, 10)]:
-		_add_tree(p, "res://assets/nature/tree_oak_fall.glb", 6.0)
-	# İçeride birkaç kütük ve çalı
-	_add_model("res://assets/nature/stump_old.glb", 1.2, Vector3(-4, 0, 9), randf() * 360.0)
-	_add_model("res://assets/nature/log.glb", 2.2, Vector3(15, 0, -15), 30.0)
-	_add_model("res://assets/nature/plant_bushLarge.glb", 2.0, Vector3(-17, 0, -17), 0.0)
-	_add_model("res://assets/nature/plant_bush.glb", 1.6, Vector3(17.5, 0, 3), 0.0)
+	# Tuğla bahçe duvarları (doğu / batı) ve üst başlık
+	for side in [-1.0, 1.0]:
+		var sx: float = side * (half + 0.15)
+		_add_solid(Vector3(sx, 1.2, 0), Vector3(0.3, 2.4, AREA_SIZE + 0.6), brick)
+		_add_deco(Vector3(sx, 2.45, 0), Vector3(0.42, 0.1, AREA_SIZE + 0.7), plaster)
 
-	# Dışarıdaki doğa: ağaç halkası, çalılar, kayalar, çimen
-	var outer_trees := ["res://assets/nature/tree_oak.glb", "res://assets/nature/tree_default.glb", "res://assets/nature/tree_fat.glb", "res://assets/nature/tree_detailed.glb", "res://assets/suburb/tree-large.glb"]
-	var placed := 0
-	var tries := 0
-	while placed < 26 and tries < 400:
-		tries += 1
-		var p := Vector3(randf_range(-36, 36), 0, randf_range(-20, 36))
-		if absf(p.x) < half + 2.5 and absf(p.z) < half + 2.5:
-			continue
-		if p.z < -half - 2.0:
-			continue
-		_add_tree(p, outer_trees[randi() % outer_trees.size()], randf_range(5.0, 7.5))
-		placed += 1
-	var small := ["res://assets/nature/plant_bush.glb", "res://assets/nature/plant_bushDetailed.glb", "res://assets/nature/rock_smallA.glb", "res://assets/nature/rock_smallC.glb", "res://assets/nature/rock_largeA.glb", "res://assets/nature/grass_large.glb", "res://assets/nature/grass.glb", "res://assets/nature/grass_leafs.glb"]
-	for i in 140:
-		var p := Vector3(randf_range(-45, 45), 0, randf_range(-45, 45))
-		if absf(p.x) < half + 0.8 and absf(p.z) < half + 0.8:
-			continue
-		var path: String = small[randi() % small.size()]
-		var size: float = 1.4 if path.contains("bush") else (1.2 if path.contains("large") else 0.7)
-		var deco := _add_model(path, size * randf_range(0.8, 1.3), p, randf() * 360.0)
-		Models.set_shadows(deco, false)
-
-	# Alan tertemiz olunca açacak çiçekler (başta gizli)
-	var flowers := ["res://assets/nature/flower_redA.glb", "res://assets/nature/flower_yellowA.glb", "res://assets/nature/flower_purpleA.glb"]
-	for i in 45:
-		var p := Vector3(randf_range(-half + 1.5, half - 1.5), 0, randf_range(-half + 1.5, half - 1.5))
-		var f := _add_model(flowers[randi() % flowers.size()], randf_range(0.6, 0.9), p, randf() * 360.0)
-		f.set_meta("full_scale", f.scale)
-		f.scale = Vector3.ZERO
-		f.visible = false
-		flower_nodes.append(f)
+	# Ahşap çit (güney): tahta yüzey, direkler, üst kuşak
+	_add_solid(Vector3(0, 0.95, half + 0.1), Vector3(AREA_SIZE, 1.9, 0.08), wood)
+	_add_deco(Vector3(0, 1.92, half + 0.1), Vector3(AREA_SIZE, 0.08, 0.14), wood)
+	var posts := int(AREA_SIZE / 2.4)
+	for i in posts + 1:
+		_add_deco(Vector3(-half + i * (AREA_SIZE / posts), 1.0, half + 0.18), Vector3(0.12, 2.0, 0.12), wood)
 
 
-func _add_tree(pos: Vector3, path: String, height: float) -> void:
-	if absf(pos.x) < AREA_SIZE * 0.5 and absf(pos.z) < AREA_SIZE * 0.5:
-		tree_positions.append(pos)
-	var body := StaticBody3D.new()
-	body.position = pos
-	var model := Models.make(path, height, true)
-	model.rotation_degrees.y = randf() * 360.0
-	body.add_child(model)
-	var cs := CollisionShape3D.new()
-	var shape := CylinderShape3D.new()
-	shape.radius = 0.35
-	shape.height = 2.0
-	cs.shape = shape
-	cs.position.y = 1.0
-	body.add_child(cs)
-	add_child(body)
+## Dünya koordinatına göre döşenen (triplanar) gerçekçi malzeme
+func _tex_mat(tex_name: String, tile_m: float, rough_value: float = 1.0, has_rough: bool = true) -> StandardMaterial3D:
+	var dir := "res://assets/textures/"
+	var m := StandardMaterial3D.new()
+	m.albedo_texture = load(dir + tex_name + "_diff.jpg")
+	m.normal_enabled = true
+	m.normal_texture = load(dir + tex_name + "_nor.jpg")
+	if has_rough:
+		m.roughness_texture = load(dir + tex_name + "_rough.png")
+		m.roughness = 1.0
+	else:
+		m.roughness = rough_value
+	m.uv1_triplanar = true
+	m.uv1_world_triplanar = true
+	m.uv1_scale = Vector3.ONE / tile_m
+	m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
+	return m
+
+
+func _add_solid(pos: Vector3, size: Vector3, mat: Material) -> void:
+	_add_deco(pos, size, mat)
+	_add_wall(pos, size)
+
+
+func _add_deco(pos: Vector3, size: Vector3, mat: Material) -> void:
+	var mi := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = size
+	bm.material = mat
+	mi.mesh = bm
+	mi.position = pos
+	add_child(mi)
 
 
 func _add_model(path: String, size: float, pos: Vector3, yaw_deg: float, by_height: bool = false) -> Node3D:
@@ -532,46 +525,47 @@ func _spawn_trash(pos: Vector3, type_index: int = -1, restore_rot = null) -> voi
 
 
 func _build_leaves() -> void:
-	var mm := MultiMesh.new()
-	mm.transform_format = MultiMesh.TRANSFORM_3D
-	mm.use_colors = true
-	var leaf := BoxMesh.new()
-	leaf.size = Vector3(0.22, 0.02, 0.16)
-	var lm := StandardMaterial3D.new()
-	lm.vertex_color_use_as_albedo = true
-	lm.roughness = 0.9
-	leaf.material = lm
-	mm.mesh = leaf
-	mm.instance_count = LEAF_COUNT
+	# Yaprak döküntüsü: zemindeki ikinci maske (1 = yapraklı). Süpürge bunu temizler.
+	leaf_data.resize(MASK_RES * MASK_RES)
+	var noise := FastNoiseLite.new()
+	noise.seed = randi()
+	noise.frequency = 0.018
+	noise.fractal_octaves = 4
+	leaf_total = 0
+	for y in MASK_RES:
+		for x in MASK_RES:
+			# Duvar diplerinde daha çok yaprak birikir
+			var ex: float = minf(x, MASK_RES - 1 - x) / float(MASK_RES)
+			var ey: float = minf(y, MASK_RES - 1 - y) / float(MASK_RES)
+			var edge: float = clampf(1.0 - minf(ex, ey) * 8.0, 0.0, 1.0)
+			var n := noise.get_noise_2d(x, y) * 0.5 + 0.5
+			var v := clampf((n - 0.42) * 3.2 + edge * 0.8, 0.0, 1.0)
+			var b := int(v * 255.0)
+			leaf_data[y * MASK_RES + x] = b
+			if b >= CLEAN_THRESHOLD:
+				leaf_total += 1
+	leaves_left = leaf_total
+	leaf_image = Image.create_from_data(MASK_RES, MASK_RES, false, Image.FORMAT_L8, leaf_data)
+	leaf_texture = ImageTexture.create_from_image(leaf_image)
+	var tex := "res://assets/textures/"
+	ground_material.set_shader_parameter("leaf_mask", leaf_texture)
+	ground_material.set_shader_parameter("leaf_albedo", load(tex + "leaves_forest_ground_diff.jpg"))
+	ground_material.set_shader_parameter("leaf_normal", load(tex + "leaves_forest_ground_nor.jpg"))
+	ground_material.set_shader_parameter("leaf_rough", load(tex + "leaves_forest_ground_rough.png"))
+	ground_material.set_shader_parameter("leaf_height", load(tex + "leaves_forest_ground_disp.png"))
 
-	# Yapraklar ağaçların çevresinde ve rüzgârla savrulmuş öbeklerde toplanır
-	var centers: Array[Vector3] = []
-	for t in tree_positions:
-		if absf(t.x) < AREA_SIZE * 0.5 and absf(t.z) < AREA_SIZE * 0.5:
-			centers.append(t)
-	for i in 5:
-		centers.append(Vector3(randf_range(-15, 15), 0, randf_range(-15, 15)))
 
-	var half := AREA_SIZE * 0.5 - 0.6
-	var palette := [Color(0.85, 0.45, 0.12), Color(0.75, 0.25, 0.1), Color(0.9, 0.7, 0.2), Color(0.55, 0.35, 0.15)]
-	leaf_positions.resize(LEAF_COUNT)
-	leaf_alive.resize(LEAF_COUNT)
-	for i in LEAF_COUNT:
-		var c: Vector3 = centers[randi() % centers.size()]
-		var ang := randf() * TAU
-		var r := sqrt(randf()) * 4.5
-		var p := Vector3(clampf(c.x + cos(ang) * r, -half, half), 0.02, clampf(c.z + sin(ang) * r, -half, half))
-		leaf_positions[i] = p
-		leaf_alive[i] = 1
-		var basis := Basis(Vector3.UP, randf() * TAU)
-		mm.set_instance_transform(i, Transform3D(basis, p))
-		var col: Color = palette[randi() % palette.size()]
-		mm.set_instance_color(i, col)
-	leaves_left = LEAF_COUNT
+func _count_leaves() -> void:
+	leaves_left = 0
+	for i in leaf_data.size():
+		if leaf_data[i] >= CLEAN_THRESHOLD:
+			leaves_left += 1
 
-	leaf_mm = MultiMeshInstance3D.new()
-	leaf_mm.multimesh = mm
-	add_child(leaf_mm)
+
+func _refresh_leaf_texture() -> void:
+	leaf_image.set_data(MASK_RES, MASK_RES, false, Image.FORMAT_L8, leaf_data)
+	leaf_texture.update(leaf_image)
+
 
 
 func _build_tool_visuals() -> void:
@@ -950,18 +944,30 @@ func _clean_at(world_pos: Vector3, delta: float) -> void:
 
 
 func _clean_leaves(p: Vector3, radius: float) -> void:
-	var r2 := radius * radius
-	for i in LEAF_COUNT:
-		if leaf_alive[i] == 0:
-			continue
-		var lp: Vector3 = leaf_positions[i]
-		var dx := lp.x - p.x
-		var dz := lp.z - p.z
-		if dx * dx + dz * dz < r2:
-			leaf_alive[i] = 0
-			leaves_left -= 1
-			leaf_mm.multimesh.set_instance_transform(i, Transform3D(Basis().scaled(Vector3.ONE * 0.001), Vector3(0, -2, 0)))
-			cleaned_since_payout += 6
+	var cx := int((p.x / AREA_SIZE + 0.5) * MASK_RES)
+	var cy := int((p.z / AREA_SIZE + 0.5) * MASK_RES)
+	var r_px := maxi(1, int(ceil(radius / AREA_SIZE * MASK_RES)))
+	var amount := (500.0 + 200.0 * (broom_level - 1)) * get_process_delta_time()
+	var changed := false
+	for y in range(maxi(cy - r_px, 0), mini(cy + r_px + 1, MASK_RES)):
+		for x in range(maxi(cx - r_px, 0), mini(cx + r_px + 1, MASK_RES)):
+			var dx: int = x - cx
+			var dy: int = y - cy
+			var dist := sqrt(float(dx * dx + dy * dy)) / float(r_px)
+			if dist > 1.0:
+				continue
+			var idx: int = y * MASK_RES + x
+			var old: int = leaf_data[idx]
+			if old == 0:
+				continue
+			var nv := int(maxf(0.0, float(old) - amount * (1.0 - dist * dist * 0.7)))
+			leaf_data[idx] = nv
+			changed = true
+			if old >= CLEAN_THRESHOLD and nv < CLEAN_THRESHOLD:
+				leaves_left -= 1
+				cleaned_since_payout += 1
+	if changed:
+		_refresh_leaf_texture()
 
 
 func _collect_trash(body: RigidBody3D) -> void:
@@ -1009,7 +1015,7 @@ func _update_progress() -> void:
 	# %90'dan sonra kalan lekeler belirgin şekilde parlar
 	ground_material.set_shader_parameter("hint", 1.0 if clean_pct >= 90.0 and not completed else 0.0)
 
-	if not completed and clean_pct >= COMPLETE_PCT and trash_bodies.is_empty():
+	if not completed and clean_pct >= COMPLETE_PCT and trash_bodies.is_empty() and leaves_left <= int(leaf_total * 0.02):
 		completed = true
 		_sweep_leftovers()
 		_bloom_flowers()
@@ -1024,10 +1030,9 @@ func _update_progress() -> void:
 
 func _sweep_leftovers() -> void:
 	# Son kırıntılar: kalan kir 5 adımda parlayarak silinir, kalan yapraklar kaybolur
-	for i in LEAF_COUNT:
-		if leaf_alive[i] == 1:
-			leaf_alive[i] = 0
-			leaf_mm.multimesh.set_instance_transform(i, Transform3D(Basis().scaled(Vector3.ONE * 0.001), Vector3(0, -2, 0)))
+	for i in leaf_data.size():
+		leaf_data[i] = 0
+	_refresh_leaf_texture()
 	leaves_left = 0
 	for step in 5:
 		get_tree().create_timer(0.15 * (step + 1)).timeout.connect(_fade_mask_step.bind(step == 4))
@@ -1137,7 +1142,7 @@ func _update_hud() -> void:
 	bag_label.text = bag_text
 	progress_bar.value = clean_pct
 	pct_label.text = "Zemin %%%d temiz" % int(clean_pct)
-	count_label.text = "Kalan çöp: %d   ·   Kalan yaprak: %d   ·   Buluntu: %d / %d" % [trash_bodies.size(), leaves_left, found_finds.size(), FINDS.size()]
+	count_label.text = "Kalan çöp: %d   ·   Yaprak: %%%d   ·   Buluntu: %d / %d" % [trash_bodies.size(), int(100.0 * leaves_left / maxf(1.0, leaf_total)), found_finds.size(), FINDS.size()]
 
 	var vac_text: String = ("Sv %d" % vacuum_level) if vacuum_level > 0 else "kilitli"
 	shop_label.text = "ALETLER\n%s [1] Süpürge  Sv %d\n%s [2] Yıkayıcı  Sv %d\n%s [3] Elk. süpürgesi  %s" % [
@@ -1371,7 +1376,7 @@ func _save_game() -> void:
 		"completed": completed, "milestone": next_milestone,
 		"clean_pixels": clean_pixel_count,
 		"mask": Marshalls.raw_to_base64(mask_data.compress(FileAccess.COMPRESSION_DEFLATE)),
-		"leaves": Marshalls.raw_to_base64(leaf_alive),
+		"leaves": Marshalls.raw_to_base64(leaf_data.compress(FileAccess.COMPRESSION_DEFLATE)),
 		"trash": trash,
 		"finds": found_finds,
 		"player": [player.global_position.x, player.global_position.z],
@@ -1406,15 +1411,13 @@ func _apply_save(d: Dictionary) -> void:
 			mask_image.set_data(MASK_RES, MASK_RES, false, Image.FORMAT_L8, mask_data)
 			mask_texture.update(mask_image)
 
-	var leaves: PackedByteArray = Marshalls.base64_to_raw(str(d.get("leaves", "")))
-	if leaves.size() == LEAF_COUNT:
-		leaves_left = 0
-		for i in LEAF_COUNT:
-			leaf_alive[i] = leaves[i]
-			if leaves[i] == 0:
-				leaf_mm.multimesh.set_instance_transform(i, Transform3D(Basis().scaled(Vector3.ONE * 0.001), Vector3(0, -2, 0)))
-			else:
-				leaves_left += 1
+	var leaves_packed: PackedByteArray = Marshalls.base64_to_raw(str(d.get("leaves", "")))
+	if leaves_packed.size() > 0:
+		var leaves_raw := leaves_packed.decompress(MASK_RES * MASK_RES, FileAccess.COMPRESSION_DEFLATE)
+		if leaves_raw.size() == MASK_RES * MASK_RES:
+			leaf_data = leaves_raw
+			_refresh_leaf_texture()
+			_count_leaves()
 
 	for item in d.get("trash", []):
 		var a: Array = item

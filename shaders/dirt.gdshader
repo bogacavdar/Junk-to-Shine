@@ -19,6 +19,14 @@ uniform sampler2D soil_normal : hint_normal, filter_linear_mipmap_anisotropic, r
 uniform sampler2D soil_rough : hint_default_white, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform float dirt_tile = 2.2;
 
+// Yaprak döküntüsü: en üst katman, süpürgeyle temizlenir
+uniform sampler2D leaf_mask : filter_linear, repeat_disable;
+uniform sampler2D leaf_albedo : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D leaf_normal : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D leaf_rough : hint_default_white, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D leaf_height : hint_default_white, filter_linear_mipmap, repeat_enable;
+uniform float leaf_tile = 1.6;
+
 varying vec3 world_pos;
 
 float hash(vec2 p) {
@@ -58,9 +66,19 @@ void fragment() {
 	float t = smoothstep(0.12, 0.4, d);
 	float wet_edge = smoothstep(0.0, 0.12, d) * (1.0 - t);
 
-	ALBEDO = mix(c_alb * (1.0 - wet_edge * 0.25), m_alb, t);
-	NORMAL_MAP = mix(c_nrm, m_nrm, t);
-	ROUGHNESS = mix(mix(c_rgh, 0.25, wet_edge), m_rgh, t);
+	vec3 base_alb = mix(c_alb * (1.0 - wet_edge * 0.25), m_alb, t);
+	vec3 base_nrm = mix(c_nrm, m_nrm, t);
+	float base_rgh = mix(mix(c_rgh, 0.25, wet_edge), m_rgh, t);
+
+	// Yapraklar: maske azaldıkça önce alçak yerlerdeki yapraklar kaybolur, yüksek öbekler en son gider
+	vec2 luv = world_pos.xz / leaf_tile;
+	float lm = texture(leaf_mask, mask_uv).r;
+	float lh = texture(leaf_height, luv).r;
+	float leaf_t = smoothstep(0.45, 0.62, lm * 1.15 - (1.0 - lh) * 0.45);
+
+	ALBEDO = mix(base_alb, texture(leaf_albedo, luv).rgb, leaf_t);
+	NORMAL_MAP = mix(base_nrm, texture(leaf_normal, luv).rgb, leaf_t);
+	ROUGHNESS = mix(base_rgh, texture(leaf_rough, luv).r, leaf_t);
 	SPECULAR = 0.5;
-	EMISSION = vec3(1.0, 0.55, 0.1) * t * hint * (0.35 + 0.65 * (0.5 + 0.5 * sin(TIME * 4.0))) * 0.6;
+	EMISSION = vec3(1.0, 0.55, 0.1) * max(t, leaf_t * 0.6) * hint * (0.35 + 0.65 * (0.5 + 0.5 * sin(TIME * 4.0))) * 0.6;
 }
