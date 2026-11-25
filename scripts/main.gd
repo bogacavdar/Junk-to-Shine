@@ -571,13 +571,13 @@ func _refresh_leaf_texture() -> void:
 func _build_tool_visuals() -> void:
 	# Hedef halkası (rengi alete göre değişir)
 	aim_ring = MeshInstance3D.new()
-	var disk := CylinderMesh.new()
-	disk.top_radius = 1.0
-	disk.bottom_radius = 1.0
-	disk.height = 0.02
-	disk.radial_segments = 24
+	var disk := TorusMesh.new()
+	disk.inner_radius = 0.95
+	disk.outer_radius = 1.0
+	disk.rings = 48
+	disk.ring_segments = 4
 	ring_mat = StandardMaterial3D.new()
-	ring_mat.albedo_color = Color(0.6, 0.9, 1.0, 0.25)
+	ring_mat.albedo_color = Color(0.65, 0.9, 1.0, 0.55)
 	ring_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	ring_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	disk.material = ring_mat
@@ -748,6 +748,7 @@ func _process(delta: float) -> void:
 	spray.global_position = aim + Vector3(0, 0.1, 0)
 	spray.emission_sphere_radius = r * (0.9 if current_tool == TOOL_VACUUM else 0.6)
 	spray.emitting = using
+	player.set_using(using)
 	_update_water_stream(using and current_tool == TOOL_WASHER, aim)
 	if using:
 		if not spray_player.playing:
@@ -871,7 +872,7 @@ func _select_tool(t: int) -> void:
 func _apply_tool_fx() -> void:
 	match current_tool:
 		TOOL_BROOM:
-			ring_mat.albedo_color = Color(1.0, 0.8, 0.4, 0.25)
+			ring_mat.albedo_color = Color(1.0, 0.85, 0.5, 0.55)
 			spray_mat.albedo_color = Color(0.72, 0.5, 0.26)
 			spray.direction = Vector3.UP
 			spray.spread = 80.0
@@ -882,7 +883,7 @@ func _apply_tool_fx() -> void:
 			spray.radial_accel_max = 8.0
 			spray_player.volume_db = -15.0
 		TOOL_WASHER:
-			ring_mat.albedo_color = Color(0.6, 0.9, 1.0, 0.25)
+			ring_mat.albedo_color = Color(0.65, 0.9, 1.0, 0.55)
 			spray_mat.albedo_color = Color(0.7, 0.9, 1.0)
 			spray.direction = Vector3.UP
 			spray.spread = 55.0
@@ -893,7 +894,7 @@ func _apply_tool_fx() -> void:
 			spray.radial_accel_max = 0.0
 			spray_player.volume_db = -18.0
 		TOOL_VACUUM:
-			ring_mat.albedo_color = Color(0.85, 0.6, 1.0, 0.25)
+			ring_mat.albedo_color = Color(0.85, 0.65, 1.0, 0.55)
 			spray_mat.albedo_color = Color(0.92, 0.9, 0.96)
 			spray.direction = Vector3.UP
 			spray.spread = 180.0

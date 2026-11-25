@@ -14,6 +14,9 @@ var tool_nodes: Array[Node3D] = []
 
 const TOOL_BASE := Vector3(0.3, -0.3, -0.55)
 var bob_time := 0.0
+var using_tool := false
+var active_tool := 1
+var use_time := 0.0
 
 
 func _ready() -> void:
@@ -45,21 +48,36 @@ func _ready() -> void:
 
 
 func _build_tools() -> void:
-	# Süpürge: sap + fırça başı, öne ve aşağı eğik
+	# Süpürge: sap sağ alttan öne-aşağı uzanır, fırça başı ekranın altında görünür
 	var broom := Node3D.new()
-	broom.rotation_degrees = Vector3(-35, 8, 0)
+	broom.position = Vector3(0.05, 0.12, 0.12)
+	var stick_dir := Vector3(-0.2, -0.75, -1.4).normalized()
+	broom.quaternion = Quaternion(Vector3.UP, -stick_dir)
 	tool_root.add_child(broom)
+	var wood := StandardMaterial3D.new()
+	wood.albedo_texture = load("res://assets/textures/wooden_gate_diff.jpg")
+	wood.albedo_color = Color(1.25, 1.1, 0.95)
+	wood.uv1_scale = Vector3(0.6, 2.0, 1.0)
+	wood.roughness = 0.55
 	var stick := CylinderMesh.new()
-	stick.top_radius = 0.018
+	stick.top_radius = 0.016
 	stick.bottom_radius = 0.018
-	stick.height = 1.3
-	stick.radial_segments = 10
-	stick.material = _mat(Color(0.55, 0.38, 0.2), 0.7)
-	_add_to(broom, stick, Vector3(0, -0.25, 0))
-	var head_mesh := BoxMesh.new()
-	head_mesh.size = Vector3(0.45, 0.08, 0.12)
-	head_mesh.material = _mat(Color(0.75, 0.6, 0.25), 0.9)
-	_add_to(broom, head_mesh, Vector3(0, -0.9, 0))
+	stick.height = 1.7
+	stick.radial_segments = 12
+	stick.material = wood
+	_add_to(broom, stick, Vector3(0, -0.85, 0))
+	var block := BoxMesh.new()
+	block.size = Vector3(0.42, 0.06, 0.09)
+	block.material = wood
+	_add_to(broom, block, Vector3(0, -1.72, 0))
+	var bristle_mat := _mat(Color(0.32, 0.22, 0.12), 0.95)
+	for i in 14:
+		var bristle := BoxMesh.new()
+		bristle.size = Vector3(0.022, 0.13, 0.07)
+		bristle.material = bristle_mat
+		var bx := -0.19 + i * (0.38 / 13.0)
+		var bm := _add_to(broom, bristle, Vector3(bx, -1.81, 0.0))
+		bm.rotation_degrees = Vector3(0, 0, randf_range(-6.0, 6.0))
 
 	# Basınçlı yıkama tabancası
 	var gun := Node3D.new()
@@ -138,6 +156,21 @@ func _physics_process(delta: float) -> void:
 	camera.position.y = sin(bob_time) * 0.035
 	tool_root.position = TOOL_BASE + Vector3(cos(bob_time * 0.5) * 0.012, sin(bob_time) * 0.018, 0)
 
+	# Kullanırken alet hareketi: süpürge sağa sola süpürür, yıkayıcı tepme, elektrik süpürgesi titreşim
+	var target_rot := Vector3.ZERO
+	if using_tool:
+		use_time += delta
+		match active_tool:
+			0:
+				target_rot = Vector3(0, sin(use_time * 7.0) * 0.32, sin(use_time * 7.0) * -0.08)
+			1:
+				tool_root.position += Vector3(randf_range(-0.003, 0.003), randf_range(-0.003, 0.003), 0.012)
+			2:
+				tool_root.position += Vector3(randf_range(-0.0025, 0.0025), randf_range(-0.0025, 0.0025), 0)
+	else:
+		use_time = 0.0
+	tool_root.rotation = tool_root.rotation.lerp(target_rot, clampf(delta * 12.0, 0.0, 1.0))
+
 
 ## Bakış açısını değiştirir (radyan cinsinden yatay/dikey). Kontrolcü ve dokunmatik kullanır.
 func add_look(v: Vector2) -> void:
@@ -151,7 +184,12 @@ func nozzle_position() -> Vector3:
 	return tool_root.global_position - camera.global_basis.z * 0.6 + camera.global_basis.y * 0.04
 
 
+func set_using(v: bool) -> void:
+	using_tool = v
+
+
 func set_tool(t: int) -> void:
+	active_tool = t
 	for i in tool_nodes.size():
 		tool_nodes[i].visible = (i == t)
 
