@@ -4,6 +4,7 @@ extends Node3D
 
 const PlayerScript := preload("res://scripts/player.gd")
 const IslandScript := preload("res://scripts/island.gd")
+const PropsScript := preload("res://scripts/props.gd")
 const Models := preload("res://scripts/models.gd")
 
 # Çöp türleri: [dosya, boyut (m), değer, sıklık, renk (dokusu eksik olanlar için, yoksa null)]
@@ -71,6 +72,7 @@ var bag_value := 0.0
 
 # --- Kir maskesi ---
 var island = null   # island.gd
+var props = null    # props.gd
 var spawn_point := Vector3.ZERO
 var sky_mat: ShaderMaterial
 var ocean_mat: ShaderMaterial
@@ -154,6 +156,7 @@ func _ready() -> void:
 	_setup_input()
 	_build_environment()
 	_build_island()
+	_build_props()
 	_build_ocean()
 	_build_container()
 	_build_player()
@@ -318,6 +321,21 @@ func _build_island() -> void:
 	spawn_point = island.spawn_point
 	container_pos = Vector3(7.0, 0.0, spawn_point.z - 2.0)
 	container_pos.y = island.height_at(container_pos.x, container_pos.z)
+
+
+func _build_props() -> void:
+	var metal := StandardMaterial3D.new()
+	metal.albedo_color = Color(0.22, 0.23, 0.24)
+	metal.metallic = 0.8
+	metal.roughness = 0.45
+	var m := {
+		"wood": _tex_mat("wooden_gate", 1.2, 0.65, false),
+		"concrete": _tex_mat("square_concrete_pavers", 2.0),
+		"metal": metal,
+	}
+	props = PropsScript.new()
+	add_child(props)
+	props.setup(island, m, world_seed)
 
 
 func _build_ocean() -> void:
@@ -946,6 +964,7 @@ func _update_zones(delta: float) -> void:
 	for zn in range(1, n):
 		if island.zone_unlocked(zn) and not zones_done.has(zn) and island.zone_fraction(zn) >= 0.97:
 			zones_done.append(zn)
+			props.restore(zn, false)
 			var reward: float = float(island.zone_total[zn]) * MONEY_PER_PIXEL * IslandScript.ZONE_MULT[zn] * 0.25 * money_mult()
 			money += reward
 			_show_banner("%s TERTEMİZ!  +%s" % [str(IslandScript.ZONE_NAMES[zn]).to_upper(), _fmt(reward)])
@@ -1433,6 +1452,7 @@ func _apply_save(d: Dictionary) -> void:
 	island.set_unlocked(int(zd.get("unlocked", 2)))
 	for v in zd.get("done", []):
 		zones_done.append(int(v))
+		props.restore(int(v), true)
 	for v in zd.get("spawned", [1]):
 		zones_spawned.append(int(v))
 
