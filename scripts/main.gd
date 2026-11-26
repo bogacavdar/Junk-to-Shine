@@ -31,17 +31,25 @@ const TRASH_TYPES := [
 
 const MASK_RES := 256            # kir maskesi çözünürlüğü
 const CLEAN_THRESHOLD := 40      # bu değerin altındaki piksel "temiz" sayılır (0-255)
-const PIXELS_PER_COIN := 25      # kaç temiz piksel = 1 para
 const REACH := 5.0               # aletin oyuncudan en uzak erişimi
 const TRASH_COUNT := 70
 const COMPLETE_PCT := 99.0       # bu orandan sonra kalan kırıntılar otomatik temizlenir
 const COMPLETE_BONUS := 250
 
 # --- Yükseltme fiyatları (bir sonraki seviyenin fiyatı) ---
-const WASHER_PRICES := [40, 120, 300, 700]    # yıkayıcı seviye 2..5
-const BROOM_PRICES := [25, 80, 200]           # süpürge seviye 2..4
-const VACUUM_PRICES := [80, 200, 500]         # elektrik süpürgesi seviye 1..3 (1 = kilidi açar)
-const BAG_PRICES := [30, 90, 250, 600]        # çanta seviye 2..5
+# Artımlı yükseltmeler: fiyat = taban × artış^seviye. max = -1 ise sınırsız.
+# "güç" türü yükseltmeler: seviye başına +%10, her 10 seviyede ×2.
+const UPGRADES := [
+	{"id": "pressure", "name": "Yıkayıcı basıncı", "base": 15.0, "growth": 1.15, "max": -1},
+	{"id": "nozzle", "name": "Geniş başlık", "base": 40.0, "growth": 1.32, "max": 30},
+	{"id": "broom", "name": "Sert kıl süpürge", "base": 15.0, "growth": 1.15, "max": -1},
+	{"id": "broom_w", "name": "Geniş süpürge", "base": 40.0, "growth": 1.32, "max": 30},
+	{"id": "bag", "name": "Büyük çanta", "base": 25.0, "growth": 1.22, "max": 40},
+	{"id": "vacuum", "name": "Elektrik süpürgesi", "base": 120.0, "growth": 1.25, "max": 25},
+	{"id": "shoes", "name": "Koşu ayakkabısı", "base": 60.0, "growth": 1.45, "max": 15},
+	{"id": "bonus", "name": "Geri dönüşüm primi", "base": 80.0, "growth": 1.2, "max": -1},
+]
+const MONEY_PER_PIXEL := 0.04    # temizlenen her piksel (temel)
 const WALK_PICKUP := 1.3                      # üstünden geçince toplama mesafesi
 
 # --- Aletler ---
@@ -50,18 +58,16 @@ const TOOL_WASHER := 1
 const TOOL_VACUUM := 2
 
 var current_tool := TOOL_WASHER
-var washer_level := 1
-var broom_level := 1
-var vacuum_level := 0
-var bag_level := 1
+var levels := {}            # yükseltme id -> seviye
+var vacuum_level := 0       # levels["vacuum"] kopyası (sık kullanılıyor)
 var vacuum_active := false
 var vacuum_point := Vector3.ZERO
 
 # --- Ekonomi ---
-var money := 0
+var money := 0.0
 var shown_money := 0.0
 var bag := 0
-var bag_value := 0
+var bag_value := 0.0
 
 # --- Kir maskesi ---
 var island = null   # island.gd
@@ -129,6 +135,7 @@ var is_mobile := OS.has_feature("mobile")
 var touch = null   # touch_controls.gd (sadece telefonda)
 var water_stream: MeshInstance3D
 var shop_buttons: Array[Button] = []
+var shop_rows: Array[Label] = []
 
 
 func _ready() -> void:
@@ -143,6 +150,7 @@ func _ready() -> void:
 	_build_ocean()
 	_build_container()
 	_build_player()
+	_apply_levels()
 	_place_finds()
 	randomize()
 	_build_tool_visuals()
@@ -568,7 +576,7 @@ func _build_hud() -> void:
 
 	# Dükkân paneli: konteynerin yanına gelince açılır
 	shop_panel = PanelContainer.new()
-	shop_panel.position = Vector2(440, 200)
+	shop_panel.position = Vector2(330, 70)
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color(0.07, 0.11, 0.09, 0.9)
 	sb.set_corner_radius_all(10)
@@ -582,13 +590,21 @@ func _build_hud() -> void:
 	title.add_theme_font_size_override("font_size", 24)
 	title.add_theme_color_override("font_color", Color(0.6, 1.0, 0.75))
 	vb.add_child(title)
-	for i in 4:
+	for i in UPGRADES.size():
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 12)
+		var l := Label.new()
+		l.custom_minimum_size = Vector2(440, 0)
+		l.add_theme_font_size_override("font_size", 17)
+		row.add_child(l)
+		shop_rows.append(l)
 		var b := Button.new()
-		b.custom_minimum_size = Vector2(380, 44)
+		b.custom_minimum_size = Vector2(150, 48)
 		b.add_theme_font_size_override("font_size", 18)
 		b.focus_mode = Control.FOCUS_ALL
 		b.pressed.connect(_on_shop_button.bind(i))
-		vb.add_child(b)
+		row.add_child(b)
+		vb.add_child(row)
 		shop_buttons.append(b)
 	shop_panel.visible = false
 	layer.add_child(shop_panel)
@@ -672,9 +688,9 @@ func _process(delta: float) -> void:
 
 	# Temizlikten gelen para
 	tick_cooldown -= delta
-	while cleaned_since_payout >= PIXELS_PER_COIN:
-		cleaned_since_payout -= PIXELS_PER_COIN
-		money += 1
+	if cleaned_since_payout > 0:
+		money += cleaned_since_payout * MONEY_PER_PIXEL * money_mult()
+		cleaned_since_payout = 0
 		if tick_cooldown <= 0.0:
 			_play_blip(blip_stream, 1.4 + randf() * 0.3, -14.0)
 			tick_cooldown = 0.09
@@ -684,7 +700,7 @@ func _process(delta: float) -> void:
 		combo = 0
 
 	_update_progress()
-	shown_money = move_toward(shown_money, float(money), maxf(1.0, absf(money - shown_money)) * delta * 6.0)
+	shown_money = move_toward(shown_money, money, maxf(1.0, absf(money - shown_money)) * delta * 6.0)
 	_update_hud()
 
 
@@ -834,13 +850,13 @@ func _clean_at(world_pos: Vector3, delta: float) -> void:
 
 
 func _clean_leaves(p: Vector3, radius: float) -> void:
-	var n: int = island.clean(p, radius, (500.0 + 200.0 * (broom_level - 1)) * get_process_delta_time(), "leaf")
+	var n: int = island.clean(p, radius, broom_strength() * get_process_delta_time(), "leaf")
 	cleaned_since_payout += n
 
 
 func _collect_trash(body: RigidBody3D) -> void:
 	trash_bodies.erase(body)
-	var value: int = body.get_meta("value", 3)
+	var value := float(body.get_meta("value", 3)) * money_mult()
 	bag += 1
 	bag_value += value
 	body.freeze_mode = RigidBody3D.FREEZE_MODE_KINEMATIC
@@ -856,17 +872,17 @@ func _collect_trash(body: RigidBody3D) -> void:
 	combo += 1
 	combo_timer = 1.0
 	_play_blip(blip_stream, 1.0 + minf(combo, 12) * 0.06 + randf() * 0.05, -6.0)
-	_float_text(body.global_position + Vector3(0, 1.0, 0), "+%d" % value, Color(1.0, 0.85, 0.3))
+	_float_text(body.global_position + Vector3(0, 1.0, 0), "+" + _fmt(value), Color(1.0, 0.85, 0.3))
 
 
 func _sell() -> void:
 	var earned := bag_value
 	money += earned
-	_float_text(container_pos + Vector3(0, 3.2, 0), "+%d SATILDI" % earned, Color(0.5, 1.0, 0.6))
+	_float_text(container_pos + Vector3(0, 3.2, 0), "+%s SATILDI" % _fmt(earned), Color(0.5, 1.0, 0.6))
 	for i in mini(bag, 6):
 		get_tree().create_timer(0.06 * i).timeout.connect(_play_blip.bind(coin_stream, 1.0 + i * 0.08, -6.0))
 	bag = 0
-	bag_value = 0
+	bag_value = 0.0
 
 
 func _update_progress() -> void:
@@ -902,79 +918,127 @@ func _update_progress() -> void:
 # ALETLER VE YÜKSELTMELER
 # =====================================================================
 
+func lvl(id: String) -> int:
+	return int(levels.get(id, 0))
+
+## Güç çarpanı: seviye başına +%10, her 10 seviyede ×2
+func power_mult(l: int) -> float:
+	return (1.0 + 0.1 * l) * pow(2.0, floori(l / 10.0))
+
+func money_mult() -> float:
+	return power_mult(lvl("bonus"))
+
 func tool_radius() -> float:
 	match current_tool:
 		TOOL_BROOM:
-			return 1.6 + 0.5 * (broom_level - 1)
+			return 0.8 * (1.0 + 0.06 * lvl("broom_w"))
 		TOOL_VACUUM:
-			return 1.8 + 0.6 * vacuum_level
+			return 1.4 + 0.12 * vacuum_level
 	return washer_radius()
 
 func washer_radius() -> float:
-	return 0.9 + 0.35 * (washer_level - 1)
+	return 0.5 * (1.0 + 0.06 * lvl("nozzle"))
 
 func washer_strength() -> float:
-	return 350.0 + 150.0 * (washer_level - 1)
+	return 80.0 * power_mult(lvl("pressure"))
+
+func broom_strength() -> float:
+	return 120.0 * power_mult(lvl("broom"))
 
 func bag_capacity() -> int:
-	return 6 + 6 * (bag_level - 1)
+	return 6 + 3 * lvl("bag")
+
+func upgrade_price(i: int) -> float:
+	var u: Dictionary = UPGRADES[i]
+	return float(u["base"]) * pow(float(u["growth"]), lvl(u["id"]))
+
+func upgrade_maxed(i: int) -> bool:
+	var u: Dictionary = UPGRADES[i]
+	return int(u["max"]) >= 0 and lvl(u["id"]) >= int(u["max"])
+
+## Yükseltmenin şu anki etkisi (dükkânda gösterilir)
+func upgrade_effect(id: String) -> String:
+	match id:
+		"pressure":
+			return "Kir sökme ×%s" % _fmt_mult(power_mult(lvl(id)))
+		"nozzle":
+			return "Genişlik %.2f m" % (washer_radius() * 2.0)
+		"broom":
+			return "Yaprak sökme ×%s" % _fmt_mult(power_mult(lvl(id)))
+		"broom_w":
+			return "Genişlik %.2f m" % (0.8 * (1.0 + 0.06 * lvl(id)) * 2.0)
+		"bag":
+			return "%d çöp" % bag_capacity()
+		"vacuum":
+			return "Kilitli" if vacuum_level == 0 else "Çekim Sv %d" % vacuum_level
+		"shoes":
+			return "Hız +%%%d" % (lvl(id) * 5)
+		"bonus":
+			return "Kazanç ×%s" % _fmt_mult(money_mult())
+	return ""
+
+
+func _apply_levels() -> void:
+	vacuum_level = lvl("vacuum")
+	if player != null:
+		var k := 1.0 + 0.05 * lvl("shoes")
+		player.walk_speed = 4.5 * k
+		player.run_speed = 7.5 * k
 
 
 func _on_shop_button(i: int) -> void:
-	match i:
-		0:
-			if washer_level - 1 < WASHER_PRICES.size() and _try_pay(WASHER_PRICES[washer_level - 1]):
-				washer_level += 1
-				_upgrade_text("Yıkayıcı Sv %d" % washer_level)
-		1:
-			if broom_level - 1 < BROOM_PRICES.size() and _try_pay(BROOM_PRICES[broom_level - 1]):
-				broom_level += 1
-				_upgrade_text("Süpürge Sv %d" % broom_level)
-		2:
-			if vacuum_level < VACUUM_PRICES.size() and _try_pay(VACUUM_PRICES[vacuum_level]):
-				vacuum_level += 1
-				if vacuum_level == 1:
-					_upgrade_text("Elektrik süpürgesi açıldı! [3]")
-					_select_tool(TOOL_VACUUM)
-				else:
-					_upgrade_text("Elektrik süpürgesi Sv %d" % vacuum_level)
-		3:
-			if bag_level - 1 < BAG_PRICES.size() and _try_pay(BAG_PRICES[bag_level - 1]):
-				bag_level += 1
-				_upgrade_text("Çanta %d" % bag_capacity())
+	if upgrade_maxed(i):
+		return
+	if not _try_pay(upgrade_price(i)):
+		return
+	var u: Dictionary = UPGRADES[i]
+	var id: String = u["id"]
+	levels[id] = lvl(id) + 1
+	_apply_levels()
+	if id == "vacuum" and vacuum_level == 1:
+		_upgrade_text("Elektrik süpürgesi açıldı! [3]")
+		_select_tool(TOOL_VACUUM)
+	else:
+		_upgrade_text("%s Sv %d" % [u["name"], lvl(id)])
+	if lvl(id) % 10 == 0 and int(u["max"]) < 0:
+		_float_text(player.global_position + Vector3(0, 3.1, 0), "×2 SIÇRAMA!", Color(1.0, 0.8, 0.3))
 
 
 func _upgrade_text(text: String) -> void:
 	_float_text(player.global_position + Vector3(0, 2.6, 0), text, Color(0.6, 0.9, 1.0))
 
 
-func _try_pay(price: int) -> bool:
+func _try_pay(price: float) -> bool:
 	if money < price:
 		_float_text(player.global_position + Vector3(0, 2.6, 0), "Para yetmiyor", Color(1.0, 0.5, 0.5))
 		_play_blip(blip_stream, 0.5, -8.0)
 		return false
 	money -= price
-	shown_money = float(money)
+	shown_money = money
 	for i in 3:
 		get_tree().create_timer(0.07 * i).timeout.connect(_play_blip.bind(coin_stream, 1.2 + i * 0.15, -6.0))
 	return true
 
 
-func _set_shop_button(i: int, label: String, prices: Array, level_index: int, verb: String) -> void:
-	var b: Button = shop_buttons[i]
-	if level_index >= prices.size():
-		b.text = "%s   ·   MAKS" % label
-		b.disabled = true
-		return
-	var price: int = prices[level_index]
-	b.text = "%s   ·   %s: %d" % [label, verb, price]
-	b.disabled = money < price
+func _refresh_shop() -> void:
+	for i in UPGRADES.size():
+		var u: Dictionary = UPGRADES[i]
+		var lbl: Label = shop_rows[i]
+		var b: Button = shop_buttons[i]
+		lbl.text = "%s  Sv %d\n%s" % [u["name"], lvl(u["id"]), upgrade_effect(u["id"])]
+		if upgrade_maxed(i):
+			b.text = "MAKS"
+			b.disabled = true
+		else:
+			var price := upgrade_price(i)
+			b.text = _fmt(price)
+			b.disabled = money < price
 
 
 func _update_hud() -> void:
-	money_label.text = "Para: %d" % int(round(shown_money))
+	money_label.text = "Para: %s" % _fmt(shown_money)
 	var cap := bag_capacity()
-	var bag_text := "Çanta: %d / %d   (değeri %d)" % [bag, cap, bag_value]
+	var bag_text := "Çanta: %d / %d   (değeri %s)" % [bag, cap, _fmt(bag_value)]
 	if bag >= cap:
 		bag_text += "   ·  DOLU! Konteynere götür"
 	bag_label.text = bag_text
@@ -985,16 +1049,13 @@ func _update_hud() -> void:
 
 	var vac_text: String = ("Sv %d" % vacuum_level) if vacuum_level > 0 else "kilitli"
 	shop_label.text = "ALETLER\n%s [1] Süpürge  Sv %d\n%s [2] Yıkayıcı  Sv %d\n%s [3] Elk. süpürgesi  %s" % [
-		">" if current_tool == TOOL_BROOM else "  ", broom_level,
-		">" if current_tool == TOOL_WASHER else "  ", washer_level,
+		">" if current_tool == TOOL_BROOM else "  ", lvl("broom"),
+		">" if current_tool == TOOL_WASHER else "  ", lvl("pressure"),
 		">" if current_tool == TOOL_VACUUM else "  ", vac_text,
 	]
 
 	if shop_panel.visible:
-		_set_shop_button(0, "Yıkayıcı Sv %d" % washer_level, WASHER_PRICES, washer_level - 1, "Yükselt")
-		_set_shop_button(1, "Süpürge Sv %d" % broom_level, BROOM_PRICES, broom_level - 1, "Yükselt")
-		_set_shop_button(2, "Elektrik süpürgesi " + vac_text, VACUUM_PRICES, vacuum_level, "Satın al" if vacuum_level == 0 else "Yükselt")
-		_set_shop_button(3, "Çanta %d" % cap, BAG_PRICES, bag_level - 1, "Yükselt")
+		_refresh_shop()
 
 
 # =====================================================================
@@ -1156,10 +1217,10 @@ func _check_finds() -> void:
 func _reveal_find(i: int) -> void:
 	found_finds.append(i)
 	var info: Array = FINDS[i]
-	var value: int = info[1]
+	var value: float = float(info[1]) * money_mult() * 5.0
 	money += value
 	var p: Vector3 = find_positions[i]
-	_float_text(p + Vector3(0, 1.4, 0), "Buldun: %s!  +%d" % [info[0], value], Color(1.0, 0.85, 0.3))
+	_float_text(p + Vector3(0, 1.4, 0), "Buldun: %s!  +%s" % [info[0], _fmt(value)], Color(1.0, 0.85, 0.3))
 	for k in 5:
 		get_tree().create_timer(0.07 * k).timeout.connect(_play_blip.bind(coin_stream, 1.0 + k * 0.12, -4.0))
 	# Altın parıltı patlaması
@@ -1219,7 +1280,7 @@ func _save_game() -> void:
 		"version": 1,
 		"seed": world_seed,
 		"money": money,
-		"washer": washer_level, "broom": broom_level, "vacuum": vacuum_level, "bag_level": bag_level,
+		"levels": levels,
 		"bag": bag, "bag_value": bag_value, "tool": current_tool,
 		"completed": completed, "milestone": next_milestone,
 		"island": island.save_data(),
@@ -1235,14 +1296,14 @@ func _save_game() -> void:
 
 
 func _apply_save(d: Dictionary) -> void:
-	money = int(d.get("money", 0))
-	shown_money = float(money)
-	washer_level = int(d.get("washer", 1))
-	broom_level = int(d.get("broom", 1))
-	vacuum_level = int(d.get("vacuum", 0))
-	bag_level = int(d.get("bag_level", 1))
+	money = float(d.get("money", 0.0))
+	shown_money = money
+	var lv: Dictionary = d.get("levels", {})
+	for k in lv:
+		levels[str(k)] = int(lv[k])
+	_apply_levels()
 	bag = int(d.get("bag", 0))
-	bag_value = int(d.get("bag_value", 0))
+	bag_value = float(d.get("bag_value", 0.0))
 	current_tool = int(d.get("tool", TOOL_WASHER))
 	completed = bool(d.get("completed", false))
 	next_milestone = int(d.get("milestone", 25))
@@ -1442,10 +1503,26 @@ func _focus_first(root: Node) -> void:
 			return
 
 
-## Büyük sayıları okunur yaz: 1.250 / 12,5 B / 3,2 Mn
+## Büyük sayıları okunur yaz: 950 / 12,5 B / 3,20 Mn / 7,1 Mr ...
+const SUFFIXES := ["", " B", " Mn", " Mr", " Tn", " Kn", " Kt", " Sn", " Sp", " Ok", " No", " Dc"]
+
 func _fmt(v: float) -> String:
-	if v >= 1000000.0:
-		return "%.1f Mn" % (v / 1000000.0)
-	if v >= 10000.0:
-		return "%.1f B" % (v / 1000.0)
-	return str(int(v))
+	if v < 1000.0:
+		return str(int(floor(v)))
+	var e := 0
+	while v >= 1000.0 and e < SUFFIXES.size() - 1:
+		v /= 1000.0
+		e += 1
+	var txt: String
+	if v >= 100.0:
+		txt = "%d" % int(v)
+	elif v >= 10.0:
+		txt = "%.1f" % v
+	else:
+		txt = "%.2f" % v
+	return txt.replace(".", ",") + SUFFIXES[e]
+
+func _fmt_mult(v: float) -> String:
+	if v < 100.0:
+		return ("%.1f" % v).replace(".", ",")
+	return _fmt(v)
