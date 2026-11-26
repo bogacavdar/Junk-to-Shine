@@ -1,0 +1,35 @@
+name: Calisma testi (shader ve betik hatalari)
+
+# Oyunu yazilimla calisan ekran karti (Mesa lavapipe / llvmpipe) uzerinde birkac saniye acar,
+# shader ve betik hatalarini yakalar. Ekran karti olmadigi icin yavas ama hatalari gosterir.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  calistir:
+    runs-on: ubuntu-latest
+    container:
+      image: barichello/godot-ci:4.3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Yazilim ekran karti kur
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq xvfb mesa-vulkan-drivers libvulkan1 libgl1-mesa-dri libglx-mesa0 libegl1 > /dev/null
+      - name: Projeyi ice aktar
+        run: godot --headless --import > import.log 2>&1 || true
+      - name: Forward+ (Vulkan, lavapipe) ile calistir
+        run: |
+          timeout 400 xvfb-run -a -s "-screen 0 1280x720x24" godot --path . --rendering-driver vulkan --quit-after 400 > vulkan.log 2>&1 || true
+          cat vulkan.log | head -300
+      - name: Uyumluluk (OpenGL) ile calistir
+        run: |
+          timeout 400 xvfb-run -a -s "-screen 0 1280x720x24" godot --path . --rendering-method gl_compatibility --rendering-driver opengl3 --quit-after 400 > gl.log 2>&1 || true
+          cat gl.log | head -300
+      - name: Hata ozeti
+        run: |
+          echo "==== VULKAN ===="; grep -n -A4 -E "SHADER ERROR|SCRIPT ERROR|ERROR:" vulkan.log | head -120 || true
+          echo "==== OPENGL ===="; grep -n -A4 -E "SHADER ERROR|SCRIPT ERROR|ERROR:" gl.log | head -120 || true
