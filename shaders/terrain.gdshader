@@ -7,6 +7,8 @@ uniform float chunk_size = 40.0;
 uniform sampler2D dirt_mask : filter_linear, repeat_disable;
 uniform sampler2D leaf_mask : filter_linear, repeat_disable;
 uniform float hint = 0.0;
+uniform sampler2D zone_map : filter_nearest, repeat_disable;
+uniform int unlocked_zones = 2;
 uniform float dirt_bias = 0.42;
 uniform float dirt_contrast = 2.4;
 uniform float leaf_bias = 0.55;
@@ -88,6 +90,24 @@ void fragment() {
 	alb = mix(alb, texture(leaf_albedo, luv).rgb, leaf_t);
 	nrm = mix(nrm, texture(leaf_normal, luv).rgb, leaf_t);
 	rgh = mix(rgh, 0.85, leaf_t);
+
+	// Kapalı bölge: soluk ve karanlık, sınırında turuncu şerit
+	int zone = int(round(texture(zone_map, muv).r * 255.0 / 32.0));
+	if (zone > 0 && ((unlocked_zones >> zone) & 1) == 0) {
+		float g = dot(alb, vec3(0.3, 0.59, 0.11));
+		alb = mix(alb, vec3(g), 0.75) * 0.45;
+		vec2 ts = vec2(1.0 / 33.0);
+		bool edge = false;
+		for (int k = 0; k < 4; k++) {
+			vec2 o = (k == 0) ? vec2(ts.x, 0.0) : (k == 1) ? vec2(-ts.x, 0.0) : (k == 2) ? vec2(0.0, ts.y) : vec2(0.0, -ts.y);
+			int nz = int(round(texture(zone_map, clamp(muv + o, 0.0, 1.0)).r * 255.0 / 32.0));
+			if (nz > 0 && ((unlocked_zones >> nz) & 1) == 1) { edge = true; }
+		}
+		if (edge) {
+			float stripe = step(0.5, fract((world_pos.x + world_pos.z) * 0.5));
+			alb = mix(alb, mix(vec3(0.9, 0.45, 0.05), vec3(0.08), stripe), 0.85);
+		}
+	}
 
 	ALBEDO = alb;
 	NORMAL_MAP = nrm;

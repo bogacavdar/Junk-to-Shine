@@ -75,7 +75,14 @@ var spawn_point := Vector3.ZERO
 var sky_mat: ShaderMaterial
 var ocean_mat: ShaderMaterial
 var local_clean := 0.0
-var cleaned_since_payout := 0
+var cleaned_since_payout := 0.0   # bölge çarpanıyla ağırlıklı temiz piksel
+var zones_done: Array[int] = []      # tamamlanıp ödülü verilen bölgeler
+var zones_spawned: Array[int] = []   # çöpü dağıtılmış bölgeler
+var zone_timer := 0.0
+var last_ok_pos := Vector3.ZERO
+var current_zone := 1
+var locked_msg_timer := 0.0
+const ZONE_TRASH := [0, 70, 110, 110, 130, 130, 130, 110]
 var clean_pct := 0.0
 var next_milestone := 25
 var completed := false
@@ -308,11 +315,7 @@ func _build_island() -> void:
 	add_child(island)
 	island.setup(world_seed, load("res://shaders/terrain.gdshader"), t)
 
-	# Başlangıç: güney kıyısında kumsalın bittiği yer
-	var z := 330.0
-	while z > 0.0 and island.height_at(0.0, z) < 1.8:
-		z -= 1.0
-	spawn_point = Vector3(0.0, island.height_at(0.0, z - 4.0), z - 4.0)
+	spawn_point = island.spawn_point
 	container_pos = Vector3(7.0, 0.0, spawn_point.z - 2.0)
 	container_pos.y = island.height_at(container_pos.x, container_pos.z)
 
@@ -430,14 +433,24 @@ func _build_player() -> void:
 
 
 func _spawn_all_trash() -> void:
+	_spawn_zone_trash(1)
+
+
+## Bir bölgeye çöp dağıt (bölge ilk açıldığında bir kez)
+func _spawn_zone_trash(zn: int) -> void:
+	if zones_spawned.has(zn):
+		return
+	zones_spawned.append(zn)
+	var want: int = ZONE_TRASH[zn]
 	var placed := 0
 	var tries := 0
-	while placed < TRASH_COUNT and tries < 4000:
+	var r: float = IslandScript.ISLAND_RADIUS
+	while placed < want and tries < 30000:
 		tries += 1
-		var ang := randf() * TAU
-		var dist := sqrt(randf()) * 60.0
-		var x := spawn_point.x + cos(ang) * dist
-		var z := spawn_point.z + sin(ang) * dist
+		var x := randf_range(-r, r)
+		var z := randf_range(-r, r)
+		if island.zone_at(x, z) != zn:
+			continue
 		var h: float = island.height_at(x, z)
 		if h < 0.4:
 			continue
@@ -576,7 +589,7 @@ func _build_hud() -> void:
 
 	# Dükkân paneli: konteynerin yanına gelince açılır
 	shop_panel = PanelContainer.new()
-	shop_panel.position = Vector2(330, 70)
+	shop_panel.position = Vector2(330, 40)
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color(0.07, 0.11, 0.09, 0.9)
 	sb.set_corner_radius_all(10)
@@ -606,6 +619,23 @@ func _build_hud() -> void:
 		row.add_child(b)
 		vb.add_child(row)
 		shop_buttons.append(b)
+	# Son satır: sıradaki bölgeyi erken açma
+	var zrow := HBoxContainer.new()
+	zrow.add_theme_constant_override("separation", 12)
+	var zl := Label.new()
+	zl.custom_minimum_size = Vector2(440, 0)
+	zl.add_theme_font_size_override("font_size", 17)
+	zl.add_theme_color_override("font_color", Color(1.0, 0.8, 0.45))
+	zrow.add_child(zl)
+	shop_rows.append(zl)
+	var zb := Button.new()
+	zb.custom_minimum_size = Vector2(150, 48)
+	zb.add_theme_font_size_override("font_size", 18)
+	zb.focus_mode = Control.FOCUS_ALL
+	zb.pressed.connect(_on_shop_button.bind(UPGRADES.size()))
+	zrow.add_child(zb)
+	vb.add_child(zrow)
+	shop_buttons.append(zb)
 	shop_panel.visible = false
 	layer.add_child(shop_panel)
 
@@ -688,9 +718,9 @@ func _process(delta: float) -> void:
 
 	# Temizlikten gelen para
 	tick_cooldown -= delta
-	if cleaned_since_payout > 0:
+	if cleaned_since_payout > 0.0:
 		money += cleaned_since_payout * MONEY_PER_PIXEL * money_mult()
-		cleaned_since_payout = 0
+		cleaned_since_payout = 0.0
 		if tick_cooldown <= 0.0:
 			_play_blip(blip_stream, 1.4 + randf() * 0.3, -14.0)
 			tick_cooldown = 0.09
@@ -699,6 +729,7 @@ func _process(delta: float) -> void:
 	if combo_timer <= 0.0:
 		combo = 0
 
+	_update_zones(delta)
 	_update_progress()
 	shown_money = move_toward(shown_money, money, maxf(1.0, absf(money - shown_money)) * delta * 6.0)
 	_update_hud()
@@ -707,6 +738,20 @@ func _process(delta: float) -> void:
 func _physics_process(_delta: float) -> void:
 	if paused:
 		return
+	# Kapalı bölgeye girilemez: geri it
+	var here: int = island.zone_at(player.global_position.x, player.global_position.z)
+	if here > 0 and not island.zone_unlocked(here):
+		player.global_position = Vector3(last_ok_pos.x, player.global_position.y, last_ok_pos.z)
+		player.velocity = Vector3.ZERO
+		if locked_msg_timer <= 0.0:
+			locked_msg_timer = 2.5
+			var prev: int = here - 1
+			_float_text(player.global_position + Vector3(0, 2.4, 0) - player.global_transform.basis.z * 2.0,
+				"%s kapalı: %s %%%d / %%%d" % [IslandScript.ZONE_NAMES[here], IslandScript.ZONE_NAMES[prev], int(island.zone_fraction(prev) * 100.0), int(IslandScript.ZONE_AUTO * 100.0)],
+				Color(1.0, 0.6, 0.3))
+	else:
+		last_ok_pos = player.global_position
+	locked_msg_timer -= _delta
 	var ppos := player.global_position
 	var full := bag >= bag_capacity()
 	var pull_radius := tool_radius()
@@ -843,14 +888,14 @@ func _apply_tool_fx() -> void:
 # =====================================================================
 
 func _clean_at(world_pos: Vector3, delta: float) -> void:
-	var n: int = island.clean(world_pos, washer_radius(), washer_strength() * delta, "dirt")
-	if n > 0:
+	var n: float = island.clean(world_pos, washer_radius(), washer_strength() * delta, "dirt")
+	if n > 0.0:
 		cleaned_since_payout += n
 		_check_finds()
 
 
 func _clean_leaves(p: Vector3, radius: float) -> void:
-	var n: int = island.clean(p, radius, broom_strength() * get_process_delta_time(), "leaf")
+	var n: float = island.clean(p, radius, broom_strength() * get_process_delta_time(), "leaf")
 	cleaned_since_payout += n
 
 
@@ -883,6 +928,58 @@ func _sell() -> void:
 		get_tree().create_timer(0.06 * i).timeout.connect(_play_blip.bind(coin_stream, 1.0 + i * 0.08, -6.0))
 	bag = 0
 	bag_value = 0.0
+
+
+func _update_zones(delta: float) -> void:
+	var pp := player.global_position
+	current_zone = island.zone_at(pp.x, pp.z)
+	zone_timer -= delta
+	if zone_timer > 0.0:
+		return
+	zone_timer = 0.5
+	var n: int = IslandScript.ZONE_NAMES.size()
+	# Kendiliğinden açılma: önceki bölge yeterince temizse
+	for zn in range(2, n):
+		if not island.zone_unlocked(zn) and island.zone_unlocked(zn - 1) and island.zone_fraction(zn - 1) >= IslandScript.ZONE_AUTO:
+			_unlock_zone(zn)
+	# Tamamlama ödülü
+	for zn in range(1, n):
+		if island.zone_unlocked(zn) and not zones_done.has(zn) and island.zone_fraction(zn) >= 0.97:
+			zones_done.append(zn)
+			var reward: float = float(island.zone_total[zn]) * MONEY_PER_PIXEL * IslandScript.ZONE_MULT[zn] * 0.25 * money_mult()
+			money += reward
+			_show_banner("%s TERTEMİZ!  +%s" % [str(IslandScript.ZONE_NAMES[zn]).to_upper(), _fmt(reward)])
+			for i in 8:
+				get_tree().create_timer(0.08 * i).timeout.connect(_play_blip.bind(coin_stream, 0.8 + i * 0.1, -4.0))
+
+
+func _unlock_zone(zn: int) -> void:
+	if island.zone_unlocked(zn):
+		return
+	island.set_unlocked(island.unlocked_mask | (1 << zn))
+	_spawn_zone_trash(zn)
+	_show_banner("YENİ BÖLGE: %s  (kazanç ×%s)" % [IslandScript.ZONE_NAMES[zn], _fmt_mult(IslandScript.ZONE_MULT[zn])])
+	for i in 5:
+		get_tree().create_timer(0.1 * i).timeout.connect(_play_blip.bind(coin_stream, 0.7 + i * 0.12, -4.0))
+	_save_game()
+
+
+func _show_banner(text: String) -> void:
+	banner_label.text = text
+	banner_label.visible = true
+	banner_label.modulate.a = 1.0
+	var tw := create_tween()
+	tw.tween_interval(3.0)
+	tw.tween_property(banner_label, "modulate:a", 0.0, 0.8)
+	tw.tween_callback(banner_label.hide)
+
+
+## Sıradaki kapalı bölge (yoksa -1)
+func next_locked_zone() -> int:
+	for zn in range(2, IslandScript.ZONE_NAMES.size()):
+		if not island.zone_unlocked(zn):
+			return zn
+	return -1
 
 
 func _update_progress() -> void:
@@ -987,6 +1084,11 @@ func _apply_levels() -> void:
 
 
 func _on_shop_button(i: int) -> void:
+	if i >= UPGRADES.size():
+		var zn := next_locked_zone()
+		if zn > 0 and _try_pay(IslandScript.ZONE_PRICE[zn]):
+			_unlock_zone(zn)
+		return
 	if upgrade_maxed(i):
 		return
 	if not _try_pay(upgrade_price(i)):
@@ -1033,6 +1135,19 @@ func _refresh_shop() -> void:
 			var price := upgrade_price(i)
 			b.text = _fmt(price)
 			b.disabled = money < price
+	var zl: Label = shop_rows[UPGRADES.size()]
+	var zb: Button = shop_buttons[UPGRADES.size()]
+	var zn := next_locked_zone()
+	if zn < 0:
+		zl.text = "Bütün bölgeler açık"
+		zb.text = "—"
+		zb.disabled = true
+	else:
+		zl.text = "Yeni bölge: %s  (kazanç ×%s)\nya da %s %%%d temizlenince kendiliğinden açılır" % [
+			IslandScript.ZONE_NAMES[zn], _fmt_mult(IslandScript.ZONE_MULT[zn]), IslandScript.ZONE_NAMES[zn - 1], int(IslandScript.ZONE_AUTO * 100.0)]
+		var zp: float = IslandScript.ZONE_PRICE[zn]
+		zb.text = _fmt(zp)
+		zb.disabled = money < zp
 
 
 func _update_hud() -> void:
@@ -1045,7 +1160,11 @@ func _update_hud() -> void:
 	progress_bar.value = clean_pct
 	var m2 := float(island.dirt_clean + island.leaf_clean) / 40.96
 	pct_label.text = "Ada: %%%.3f temiz   ·   %s m² temizlendi" % [clean_pct, _fmt(m2)]
-	count_label.text = "Kalan çöp: %d   ·   Buluntu: %d / %d" % [trash_bodies.size(), found_finds.size(), FINDS.size()]
+	var zn: int = current_zone
+	var zone_txt := "Deniz"
+	if zn > 0:
+		zone_txt = "%s  %%%d  (×%s)" % [IslandScript.ZONE_NAMES[zn], int(island.zone_fraction(zn) * 100.0), _fmt_mult(IslandScript.ZONE_MULT[zn])]
+	count_label.text = "Bölge: %s   ·   Kalan çöp: %d   ·   Buluntu: %d / %d" % [zone_txt, trash_bodies.size(), found_finds.size(), FINDS.size()]
 
 	var vac_text: String = ("Sv %d" % vacuum_level) if vacuum_level > 0 else "kilitli"
 	shop_label.text = "ALETLER\n%s [1] Süpürge  Sv %d\n%s [2] Yıkayıcı  Sv %d\n%s [3] Elk. süpürgesi  %s" % [
@@ -1284,6 +1403,7 @@ func _save_game() -> void:
 		"bag": bag, "bag_value": bag_value, "tool": current_tool,
 		"completed": completed, "milestone": next_milestone,
 		"island": island.save_data(),
+		"zones": {"unlocked": island.unlocked_mask, "done": zones_done, "spawned": zones_spawned},
 		"trash": trash,
 		"finds": found_finds,
 		"player": [player.global_position.x, player.global_position.z],
@@ -1309,6 +1429,12 @@ func _apply_save(d: Dictionary) -> void:
 	next_milestone = int(d.get("milestone", 25))
 	master_volume = float(d.get("volume", 0.8))
 	island.load_data(d.get("island", {}))
+	var zd: Dictionary = d.get("zones", {})
+	island.set_unlocked(int(zd.get("unlocked", 2)))
+	for v in zd.get("done", []):
+		zones_done.append(int(v))
+	for v in zd.get("spawned", [1]):
+		zones_spawned.append(int(v))
 
 	for item in d.get("trash", []):
 		var a: Array = item

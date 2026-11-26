@@ -16,6 +16,20 @@ const LAYERS := {
 }
 var raw_threshold := {}   # katman -> ham değer eşiği (0-255)
 
+# Bölgeler: 0 = deniz. Sıra açılış sırasıdır; her bölge bir öncekinin %75'i temizlenince açılır
+# (ya da dükkândan erken satın alınır).
+const ZONE_NAMES := ["Deniz", "İskele", "Sahil", "Liman", "Köy", "Tarlalar", "Orman", "Fener Tepesi"]
+const ZONE_MULT := [0.0, 1.0, 3.0, 9.0, 27.0, 80.0, 240.0, 700.0]       # kazanç çarpanı
+const ZONE_PRICE := [0.0, 0.0, 400.0, 8000.0, 150000.0, 3.0e6, 6.0e7, 1.2e9]  # erken açma fiyatı
+const ZONE_AUTO := 0.75        # bir önceki bölge bu oranda temizse sonraki kendiliğinden açılır
+const ISKELE_RADIUS := 40.0
+const LIGHTHOUSE := Vector2(150.0, -150.0)
+
+var spawn_point := Vector3.ZERO
+var unlocked_mask := 1 << 1    # başta sadece iskele açık
+var zone_total := PackedInt64Array()
+var zone_clean := PackedInt64Array()
+
 var terrain_shader: Shader
 var textures := {}
 var noise_shape := FastNoiseLite.new()
@@ -38,6 +52,15 @@ func setup(world_seed: int, shader: Shader, tex: Dictionary) -> void:
 	noise_detail.seed = world_seed + 7
 	noise_detail.frequency = 0.03
 	noise_detail.fractal_octaves = 3
+	zone_total.resize(ZONE_NAMES.size())
+	zone_clean.resize(ZONE_NAMES.size())
+	zone_total.fill(0)
+	zone_clean.fill(0)
+	# Başlangıç: güney kıyısında kumsalın bittiği yer (bölgeler buna göre çizilir)
+	var z := ISLAND_RADIUS * 1.1
+	while z > 0.0 and height_at(0.0, z) < 1.8:
+		z -= 1.0
+	spawn_point = Vector3(0.0, height_at(0.0, z - 4.0), z - 4.0)
 	for layer: String in LAYERS:
 		var L: Dictionary = LAYERS[layer]
 		raw_threshold[layer] = int(255.0 * (float(L["bias"]) + (CLEAN_THRESHOLD / 255.0 - 0.5) / float(L["contrast"])))
@@ -57,6 +80,56 @@ func height_at(x: float, z: float) -> float:
 	var lighthouse := maxf(0.0, 1.0 - Vector2(x - 150.0, z + 150.0).length() / 90.0)
 	hill += lighthouse * lighthouse * 30.0
 	return 0.6 + hill + noise_detail.get_noise_2d(x, z) * 0.8 * clampf(shape * 4.0, 0.0, 1.0)
+
+
+## Bir noktanın bölgesi (konum ve yüksekliğe göre)
+func zone_of(x: float, z: float, h: float) -> int:
+	if h < 0.0:
+		return 0
+	if Vector2(x - spawn_point.x, z - spawn_point.z).length() < ISKELE_RADIUS:
+		return 1
+	if Vector2(x, z).distance_to(LIGHTHOUSE) < 110.0:
+		return 7
+	var ang := atan2(x, z)   # 0 = güney (başlangıç tarafı), -PI/2 = batı
+	if h < 1.6:
+		if absf(ang) < 0.87:
+			return 2
+		if absf(ang + PI * 0.5) < 0.96:
+			return 3
+	if Vector2(x, z).length() < 120.0:
+		return 4
+	if z > 0.0:
+		return 5
+	return 6
+
+
+func zone_unlocked(zn: int) -> bool:
+	return zn > 0 and (unlocked_mask >> zn) & 1 == 1
+
+
+## Oyuncunun bulunduğu bölge (parça ızgarasından)
+func zone_at(x: float, z: float) -> int:
+	var key := chunk_of(x, z)
+	if not chunks.has(key):
+		return 0
+	var origin := chunk_origin(key)
+	var step := CHUNK_SIZE / float(VERTS - 1)
+	var i := clampi(int(round((x - origin.x) / step)), 0, VERTS - 1)
+	var j := clampi(int(round((z - origin.z) / step)), 0, VERTS - 1)
+	var zm: PackedByteArray = chunks[key]["zones"]
+	return zm[j * VERTS + i]
+
+
+func zone_fraction(zn: int) -> float:
+	if zone_total[zn] <= 0:
+		return 0.0
+	return minf(1.0, float(zone_clean[zn]) / float(zone_total[zn]))
+
+
+func set_unlocked(mask: int) -> void:
+	unlocked_mask = mask
+	for k in chunks:
+		(chunks[k]["mat"] as ShaderMaterial).set_shader_parameter("unlocked_zones", unlocked_mask)
 
 
 func chunk_origin(c: Vector2i) -> Vector3:
@@ -108,8 +181,22 @@ func _build_chunk(c: Vector2i) -> void:
 			st.add_index(a + VERTS)
 	var mesh := st.commit()
 
+	# Bölge haritası: köşe başına bir bölge
+	var zones := PackedByteArray()
+	zones.resize(VERTS * VERTS)
+	for j in VERTS:
+		for i in VERTS:
+			zones[j * VERTS + i] = zone_of(origin.x + i * step, origin.z + j * step, heights[j * VERTS + i])
+	var zimg_data := PackedByteArray()
+	zimg_data.resize(VERTS * VERTS)
+	for n in VERTS * VERTS:
+		zimg_data[n] = zones[n] * 32
+	var z_tex := ImageTexture.create_from_image(Image.create_from_data(VERTS, VERTS, false, Image.FORMAT_L8, zimg_data))
+
 	var mat := ShaderMaterial.new()
 	mat.shader = terrain_shader
+	mat.set_shader_parameter("zone_map", z_tex)
+	mat.set_shader_parameter("unlocked_zones", unlocked_mask)
 	for k in textures:
 		mat.set_shader_parameter(k, textures[k])
 	mat.set_shader_parameter("chunk_origin", Vector2(origin.x, origin.z))
@@ -152,9 +239,13 @@ func _build_chunk(c: Vector2i) -> void:
 	mat.set_shader_parameter("dirt_mask", d_tex)
 	mat.set_shader_parameter("leaf_mask", l_tex)
 	chunks[c] = {"mesh": mi, "mat": mat, "dirt": dirt, "leaf": leaf, "dirt_img": d_img, "leaf_img": l_img,
-		"dirt_tex": d_tex, "leaf_tex": l_tex, "modified": false, "heights": heights}
-	dirt_total += _count_est(c, "dirt", dirt)
-	leaf_total += _count_est(c, "leaf", leaf)
+		"dirt_tex": d_tex, "leaf_tex": l_tex, "modified": false, "heights": heights, "zones": zones}
+	var dc := _count_est(c, "dirt", dirt)
+	var lc := _count_est(c, "leaf", leaf)
+	for zn in ZONE_NAMES.size():
+		dirt_total += dc[zn]
+		leaf_total += lc[zn]
+		zone_total[zn] += dc[zn] + lc[zn]
 
 
 func _noise_mask(c: Vector2i, freq: float) -> PackedByteArray:
@@ -168,27 +259,31 @@ func _noise_mask(c: Vector2i, freq: float) -> PackedByteArray:
 	return img.get_data()
 
 
-## Kirli piksel sayısını örnekleyerek tahmin et (her 8 pikselde bir; deniz/kumsal altı hariç)
-func _count_est(c: Vector2i, layer: String, data: PackedByteArray) -> int:
-	var heights: PackedFloat32Array = chunks[c]["heights"] if chunks.has(c) else PackedFloat32Array()
+## Kirli piksel sayısını bölge bölge örnekleyerek tahmin et (her 8 pikselde bir; deniz/kumsal altı hariç)
+func _count_est(c: Vector2i, layer: String, data: PackedByteArray) -> PackedInt64Array:
+	var heights: PackedFloat32Array = chunks[c]["heights"]
+	var zones: PackedByteArray = chunks[c]["zones"]
 	var thr: int = raw_threshold[layer]
 	var min_h: float = LAYERS[layer]["min_h"]
 	var px_per_vert := float(MASK_RES) / float(VERTS - 1)
-	var n := 0
+	var out := PackedInt64Array()
+	out.resize(ZONE_NAMES.size())
+	out.fill(0)
 	for y in range(4, MASK_RES, 8):
-		var j: int = mini(int(y / px_per_vert), VERTS - 1)
+		var j: int = mini(int(round(y / px_per_vert)), VERTS - 1)
 		for x in range(4, MASK_RES, 8):
-			var i: int = mini(int(x / px_per_vert), VERTS - 1)
-			if heights.size() > 0 and heights[j * VERTS + i] < min_h:
+			var i: int = mini(int(round(x / px_per_vert)), VERTS - 1)
+			if heights[j * VERTS + i] < min_h:
 				continue
 			if data[y * MASK_RES + x] >= thr:
-				n += 1
-	return n * 64
+				out[zones[j * VERTS + i]] += 64
+	return out
 
 
-## Bir noktada fırça ile temizle. layer: "dirt" ya da "leaf". Döner: eşiği geçen (temizlenen) piksel sayısı.
-func clean(pos: Vector3, radius: float, amount: float, layer: String) -> int:
-	var cleaned := 0
+## Bir noktada fırça ile temizle. layer: "dirt" ya da "leaf".
+## Döner: temizlenen piksellerin bölge çarpanıyla ağırlıklı toplamı (para hesabı için). Kapalı bölgede temizlenmez.
+func clean(pos: Vector3, radius: float, amount: float, layer: String) -> float:
+	var cleaned := 0.0
 	var c0 := chunk_of(pos.x - radius, pos.z - radius)
 	var c1 := chunk_of(pos.x + radius, pos.z + radius)
 	for cz in range(c0.y, c1.y + 1):
@@ -200,9 +295,11 @@ func clean(pos: Vector3, radius: float, amount: float, layer: String) -> int:
 	return cleaned
 
 
-func _clean_chunk(key: Vector2i, pos: Vector3, radius: float, amount: float, layer: String) -> int:
+func _clean_chunk(key: Vector2i, pos: Vector3, radius: float, amount: float, layer: String) -> float:
 	var ch: Dictionary = chunks[key]
 	var data: PackedByteArray = ch[layer]
+	var zones: PackedByteArray = ch["zones"]
+	var px_per_vert := float(MASK_RES) / float(VERTS - 1)
 	var origin := chunk_origin(key)
 	var ppm := MASK_RES / CHUNK_SIZE
 	var cx := (pos.x - origin.x) * ppm
@@ -213,8 +310,9 @@ func _clean_chunk(key: Vector2i, pos: Vector3, radius: float, amount: float, lay
 	var y0 := maxi(0, int(cy - r_px))
 	var y1 := mini(MASK_RES - 1, int(cy + r_px))
 	if x0 > x1 or y0 > y1:
-		return 0
+		return 0.0
 	var cleaned := 0
+	var value := 0.0
 	var changed := false
 	var thr: int = raw_threshold[layer]
 	for y in range(y0, y1 + 1):
@@ -223,6 +321,9 @@ func _clean_chunk(key: Vector2i, pos: Vector3, radius: float, amount: float, lay
 			var dy: float = y - cy
 			var dist := sqrt(dx * dx + dy * dy) / r_px
 			if dist > 1.0:
+				continue
+			var zn: int = zones[mini(int(round(y / px_per_vert)), VERTS - 1) * VERTS + mini(int(round(x / px_per_vert)), VERTS - 1)]
+			if (unlocked_mask >> zn) & 1 == 0:
 				continue
 			var idx: int = y * MASK_RES + x
 			var old: int = data[idx]
@@ -233,6 +334,8 @@ func _clean_chunk(key: Vector2i, pos: Vector3, radius: float, amount: float, lay
 			changed = true
 			if old >= thr and nv < thr:
 				cleaned += 1
+				zone_clean[zn] += 1
+				value += ZONE_MULT[zn]
 	if changed:
 		ch[layer] = data
 		ch["modified"] = true
@@ -243,7 +346,7 @@ func _clean_chunk(key: Vector2i, pos: Vector3, radius: float, amount: float, lay
 			dirt_clean += cleaned
 		else:
 			leaf_clean += cleaned
-	return cleaned
+	return value
 
 
 ## Bir noktadaki maske değeri (0-255), parça yoksa 0
@@ -303,10 +406,13 @@ func load_data(d: Dictionary) -> void:
 				continue
 			var before := _count_est(k, layer, ch[layer])
 			var after := _count_est(k, layer, raw)
-			if layer == "dirt":
-				dirt_clean += before - after
-			else:
-				leaf_clean += before - after
+			for zn in ZONE_NAMES.size():
+				var diff: int = before[zn] - after[zn]
+				zone_clean[zn] += diff
+				if layer == "dirt":
+					dirt_clean += diff
+				else:
+					leaf_clean += diff
 			ch[layer] = raw
 			var img: Image = ch[layer + "_img"]
 			img.set_data(MASK_RES, MASK_RES, false, Image.FORMAT_L8, raw)
