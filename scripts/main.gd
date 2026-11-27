@@ -43,8 +43,10 @@ const COMPLETE_BONUS := 250
 const UPGRADES := [
 	{"id": "pressure", "name": "Yıkayıcı basıncı", "base": 15.0, "growth": 1.15, "max": -1},
 	{"id": "nozzle", "name": "Geniş başlık", "base": 40.0, "growth": 1.32, "max": 30},
-	{"id": "broom", "name": "Sert kıl süpürge", "base": 15.0, "growth": 1.15, "max": -1},
-	{"id": "broom_w", "name": "Geniş süpürge", "base": 40.0, "growth": 1.32, "max": 30},
+	{"id": "scythe", "name": "Keskin tırpan", "base": 12.0, "growth": 1.15, "max": -1},
+	{"id": "scythe_w", "name": "Uzun tırpan", "base": 35.0, "growth": 1.32, "max": 30},
+	{"id": "broom", "name": "Sık dişli tırmık", "base": 15.0, "growth": 1.15, "max": -1},
+	{"id": "broom_w", "name": "Geniş tırmık", "base": 40.0, "growth": 1.32, "max": 30},
 	{"id": "bag", "name": "Büyük çanta", "base": 25.0, "growth": 1.22, "max": 40},
 	{"id": "vacuum", "name": "Elektrik süpürgesi", "base": 120.0, "growth": 1.25, "max": 25},
 	{"id": "shoes", "name": "Koşu ayakkabısı", "base": 60.0, "growth": 1.45, "max": 15},
@@ -54,11 +56,13 @@ const MONEY_PER_PIXEL := 0.04    # temizlenen her piksel (temel)
 const WALK_PICKUP := 1.3                      # üstünden geçince toplama mesafesi
 
 # --- Aletler ---
-const TOOL_BROOM := 0
-const TOOL_WASHER := 1
-const TOOL_VACUUM := 2
+const TOOL_SCYTHE := 0    # uzun kuru ot
+const TOOL_RAKE := 1      # yaprak, dal, deniz yosunu
+const TOOL_WASHER := 2    # taş yoldaki çamur
+const TOOL_VACUUM := 3    # çöp
+const TOOL_NAMES := ["Tırpan", "Tırmık", "Yıkayıcı", "Elk. süpürgesi"]
 
-var current_tool := TOOL_WASHER
+var current_tool := TOOL_SCYTHE
 var levels := {}            # yükseltme id -> seviye
 var vacuum_level := 0       # levels["vacuum"] kopyası (sık kullanılıyor)
 var vacuum_active := false
@@ -309,6 +313,25 @@ func _build_island() -> void:
 	t["ground_tile"] = 15.0 if has_ground else 4.0
 	t["rock_albedo"] = load(tex + ("rocks_ground_02" if has_rock else "square_concrete_pavers") + "_diff.jpg")
 	t["rock_normal"] = load(tex + ("rocks_ground_02" if has_rock else "square_concrete_pavers") + "_nor.jpg")
+	# Taş yol ve meydan
+	t["pave_albedo"] = load(tex + "square_concrete_pavers_diff.jpg")
+	t["pave_normal"] = load(tex + "square_concrete_pavers_nor.jpg")
+	# Biçilmiş çim (temiz toprak zemin) ve uzun kuru ot: indirilmişse gerçek dokular, yoksa geçici
+	if ResourceLoader.exists(tex + "leafy_grass_diff.jpg"):
+		t["ground_albedo"] = load(tex + "leafy_grass_diff.jpg")
+		t["ground_normal"] = load(tex + "leafy_grass_nor.jpg")
+		t["ground_tint"] = Vector3.ONE
+		t["ground_tile"] = 2.5
+	if ResourceLoader.exists(tex + "withered_grass_diff.jpg"):
+		t["dry_albedo"] = load(tex + "withered_grass_diff.jpg")
+		t["dry_normal"] = load(tex + "withered_grass_nor.jpg")
+		t["dry_tint"] = Vector3.ONE
+		t["dry_tile"] = 2.0
+	else:
+		t["dry_albedo"] = load(tex + "dirt_floor_diff.jpg")
+		t["dry_normal"] = load(tex + "dirt_floor_nor.jpg")
+		t["dry_tint"] = Vector3(1.35, 1.15, 0.7)
+		t["dry_tile"] = 3.0
 	t["mud_albedo"] = load(tex + "brown_mud_leaves_01_diff.jpg")
 	t["mud_normal"] = load(tex + "brown_mud_leaves_01_nor.jpg")
 	t["leaf_albedo"] = load(tex + "leaves_forest_ground_diff.jpg")
@@ -567,6 +590,7 @@ func _build_audio() -> void:
 		add_child(ap)
 		blip_players.append(ap)
 	# Her aletin kendi döngü sesi: süpürge hışırtısı, su, motor uğultusu
+	tool_streams.append(_make_noise_loop(1.0, 0.12, 0.0))
 	tool_streams.append(_make_noise_loop(1.0, 0.08, 0.0))
 	tool_streams.append(_make_noise_loop(1.0, 0.35, 0.0))
 	tool_streams.append(_make_noise_loop(1.0, 0.15, 110.0))
@@ -603,7 +627,7 @@ func _build_hud() -> void:
 
 	shop_label = _make_label(layer, Vector2(990, 14), 20, Color.WHITE)
 	info_label = _make_label(layer, Vector2(24, 676), 18, Color(1, 1, 1, 0.85))
-	info_label.text = "WASD: yürü   ·   Fare: bak   ·   Shift: koş   ·   Sol tık basılı: aleti kullan   ·   1 / 2 / 3 veya tekerlek: alet değiştir   ·   Konteyner: sat, E: dükkân   ·   ESC: menü   ·   Kontrolcü destekli"
+	info_label.text = "WASD: yürü   ·   Fare: bak   ·   Shift: koş   ·   Sol tık basılı: aleti kullan   ·   1 tırpan · 2 tırmık · 3 yıkayıcı · 4 elk. süpürgesi (ya da tekerlek)   ·   Konteyner: sat, E: dükkân   ·   ESC: menü   ·   Kontrolcü destekli"
 
 	# Dükkân paneli: konteynerin yanına gelince açılır
 	shop_panel = PanelContainer.new()
@@ -716,10 +740,12 @@ func _process(delta: float) -> void:
 	vacuum_active = false
 	if using:
 		match current_tool:
-			TOOL_BROOM:
-				_clean_leaves(aim, r)
+			TOOL_SCYTHE:
+				_clean_layer("grass", aim, r, scythe_strength() * delta)
+			TOOL_RAKE:
+				_clean_layer("leaf", aim, r, broom_strength() * delta)
 			TOOL_WASHER:
-				_clean_at(aim, delta)
+				_clean_layer("dirt", aim, r, washer_strength() * delta)
 			TOOL_VACUUM:
 				vacuum_active = true
 				vacuum_point = aim
@@ -823,7 +849,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			_set_shop_open(true)
 		return
 	if event.is_action_pressed("tool_next") or event.is_action_pressed("tool_prev"):
-		var count_t: int = 3 if vacuum_level > 0 else 2
+		var count_t: int = 4 if vacuum_level > 0 else 3
 		_select_tool(posmod(current_tool + (1 if event.is_action_pressed("tool_next") else -1), count_t))
 		return
 	# Fare bırakıldıysa tıklayınca yeniden yakala (masaüstü)
@@ -833,10 +859,12 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.physical_keycode:
 			KEY_1:
-				_select_tool(TOOL_BROOM)
+				_select_tool(TOOL_SCYTHE)
 			KEY_2:
-				_select_tool(TOOL_WASHER)
+				_select_tool(TOOL_RAKE)
 			KEY_3:
+				_select_tool(TOOL_WASHER)
+			KEY_4:
 				_select_tool(TOOL_VACUUM)
 	elif event is InputEventMouseButton and event.pressed:
 		var step := 0
@@ -845,7 +873,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			step = 1
 		if step != 0:
-			var count: int = 3 if vacuum_level > 0 else 2
+			var count: int = 4 if vacuum_level > 0 else 3
 			_select_tool(posmod(current_tool + step, count))
 
 
@@ -864,7 +892,18 @@ func _select_tool(t: int) -> void:
 
 func _apply_tool_fx() -> void:
 	match current_tool:
-		TOOL_BROOM:
+		TOOL_SCYTHE:
+			ring_mat.albedo_color = Color(0.75, 1.0, 0.45, 0.55)
+			spray_mat.albedo_color = Color(0.72, 0.66, 0.35)
+			spray.direction = Vector3.UP
+			spray.spread = 70.0
+			spray.initial_velocity_min = 1.5
+			spray.initial_velocity_max = 3.0
+			spray.gravity = Vector3(0, -6.0, 0)
+			spray.radial_accel_min = 2.0
+			spray.radial_accel_max = 5.0
+			spray_player.volume_db = -14.0
+		TOOL_RAKE:
 			ring_mat.albedo_color = Color(1.0, 0.85, 0.5, 0.55)
 			spray_mat.albedo_color = Color(0.72, 0.5, 0.26)
 			spray.direction = Vector3.UP
@@ -905,16 +944,11 @@ func _apply_tool_fx() -> void:
 # TEMİZLİK
 # =====================================================================
 
-func _clean_at(world_pos: Vector3, delta: float) -> void:
-	var n: float = island.clean(world_pos, washer_radius(), washer_strength() * delta, "dirt")
+func _clean_layer(layer: String, p: Vector3, radius: float, amount: float) -> void:
+	var n: float = island.clean(p, radius, amount, layer)
 	if n > 0.0:
 		cleaned_since_payout += n
 		_check_finds()
-
-
-func _clean_leaves(p: Vector3, radius: float) -> void:
-	var n: float = island.clean(p, radius, broom_strength() * get_process_delta_time(), "leaf")
-	cleaned_since_payout += n
 
 
 func _collect_trash(body: RigidBody3D) -> void:
@@ -1013,10 +1047,8 @@ func _update_progress() -> void:
 			var p := ppos + Vector3(cos(a) * ring, 0, sin(a) * ring)
 			if island.height_at(p.x, p.z) < 0.3:
 				continue
-			total_pts += 2
-			if island.sample(p, "dirt") < CLEAN_THRESHOLD:
-				clean_pts += 1
-			if island.sample(p, "leaf") < CLEAN_THRESHOLD:
+			total_pts += 1
+			if island.sample_max(p) < CLEAN_THRESHOLD:
 				clean_pts += 1
 	var target: float = float(clean_pts) / float(maxi(1, total_pts))
 	local_clean = lerpf(local_clean, target, clampf(get_process_delta_time() * 0.6, 0.0, 1.0))
@@ -1046,7 +1078,9 @@ func money_mult() -> float:
 
 func tool_radius() -> float:
 	match current_tool:
-		TOOL_BROOM:
+		TOOL_SCYTHE:
+			return 0.7 * (1.0 + 0.06 * lvl("scythe_w"))
+		TOOL_RAKE:
 			return 0.8 * (1.0 + 0.06 * lvl("broom_w"))
 		TOOL_VACUUM:
 			return 1.4 + 0.12 * vacuum_level
@@ -1057,6 +1091,9 @@ func washer_radius() -> float:
 
 func washer_strength() -> float:
 	return 80.0 * power_mult(lvl("pressure"))
+
+func scythe_strength() -> float:
+	return 100.0 * power_mult(lvl("scythe"))
 
 func broom_strength() -> float:
 	return 120.0 * power_mult(lvl("broom"))
@@ -1079,8 +1116,12 @@ func upgrade_effect(id: String) -> String:
 			return "Kir sökme ×%s" % _fmt_mult(power_mult(lvl(id)))
 		"nozzle":
 			return "Genişlik %.2f m" % (washer_radius() * 2.0)
+		"scythe":
+			return "Ot biçme ×%s" % _fmt_mult(power_mult(lvl(id)))
+		"scythe_w":
+			return "Genişlik %.2f m" % (0.7 * (1.0 + 0.06 * lvl(id)) * 2.0)
 		"broom":
-			return "Yaprak sökme ×%s" % _fmt_mult(power_mult(lvl(id)))
+			return "Yaprak toplama ×%s" % _fmt_mult(power_mult(lvl(id)))
 		"broom_w":
 			return "Genişlik %.2f m" % (0.8 * (1.0 + 0.06 * lvl(id)) * 2.0)
 		"bag":
@@ -1177,7 +1218,7 @@ func _update_hud() -> void:
 		bag_text += "   ·  DOLU! Konteynere götür"
 	bag_label.text = bag_text
 	progress_bar.value = clean_pct
-	var m2 := float(island.dirt_clean + island.leaf_clean) / 40.96
+	var m2 := float(island.total_clean()) / 40.96
 	pct_label.text = "Ada: %%%.3f temiz   ·   %s m² temizlendi" % [clean_pct, _fmt(m2)]
 	var zn: int = current_zone
 	var zone_txt := "Deniz"
@@ -1186,8 +1227,9 @@ func _update_hud() -> void:
 	count_label.text = "Bölge: %s   ·   Kalan çöp: %d   ·   Buluntu: %d / %d" % [zone_txt, trash_bodies.size(), found_finds.size(), FINDS.size()]
 
 	var vac_text: String = ("Sv %d" % vacuum_level) if vacuum_level > 0 else "kilitli"
-	shop_label.text = "ALETLER\n%s [1] Süpürge  Sv %d\n%s [2] Yıkayıcı  Sv %d\n%s [3] Elk. süpürgesi  %s" % [
-		">" if current_tool == TOOL_BROOM else "  ", lvl("broom"),
+	shop_label.text = "ALETLER\n%s [1] Tırpan  Sv %d\n%s [2] Tırmık  Sv %d\n%s [3] Yıkayıcı  Sv %d\n%s [4] Elk. süpürgesi  %s" % [
+		">" if current_tool == TOOL_SCYTHE else "  ", lvl("scythe"),
+		">" if current_tool == TOOL_RAKE else "  ", lvl("broom"),
 		">" if current_tool == TOOL_WASHER else "  ", lvl("pressure"),
 		">" if current_tool == TOOL_VACUUM else "  ", vac_text,
 	]
@@ -1348,7 +1390,7 @@ func _check_finds() -> void:
 		if found_finds.has(i):
 			continue
 		var p: Vector3 = find_positions[i]
-		if island.sample(p, "dirt") < CLEAN_THRESHOLD:
+		if island.sample_max(p) < CLEAN_THRESHOLD:
 			_reveal_find(i)
 
 
@@ -1443,7 +1485,9 @@ func _apply_save(d: Dictionary) -> void:
 	_apply_levels()
 	bag = int(d.get("bag", 0))
 	bag_value = float(d.get("bag_value", 0.0))
-	current_tool = int(d.get("tool", TOOL_WASHER))
+	current_tool = clampi(int(d.get("tool", TOOL_SCYTHE)), 0, 3)
+	if current_tool == TOOL_VACUUM and vacuum_level == 0:
+		current_tool = TOOL_SCYTHE
 	completed = bool(d.get("completed", false))
 	next_milestone = int(d.get("milestone", 25))
 	master_volume = float(d.get("volume", 0.8))

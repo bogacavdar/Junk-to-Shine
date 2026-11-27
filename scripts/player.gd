@@ -12,11 +12,12 @@ var camera: Camera3D
 var tool_root: Node3D
 var tool_nodes: Array[Node3D] = []
 var nozzle_marker: Node3D
+var head_markers: Array = []   # alet başına zemine değen uç (yoksa null)
 
 const TOOL_BASE := Vector3(0.3, -0.3, -0.55)
 var bob_time := 0.0
 var using_tool := false
-var active_tool := 1
+var active_tool := 0
 var use_time := 0.0
 
 
@@ -49,36 +50,77 @@ func _ready() -> void:
 
 
 func _build_tools() -> void:
-	# Süpürge: sap sağ alttan öne-aşağı uzanır, fırça başı ekranın altında görünür
-	var broom := Node3D.new()
-	broom.position = Vector3(0.05, 0.12, 0.12)
-	var stick_dir := Vector3(-0.2, -0.75, -1.4).normalized()
-	broom.quaternion = Quaternion(Vector3.UP, -stick_dir)
-	tool_root.add_child(broom)
 	var wood := StandardMaterial3D.new()
 	wood.albedo_texture = load("res://assets/textures/wooden_gate_diff.jpg")
 	wood.albedo_color = Color(1.25, 1.1, 0.95)
 	wood.uv1_scale = Vector3(0.6, 2.0, 1.0)
 	wood.roughness = 0.55
-	var stick := CylinderMesh.new()
-	stick.top_radius = 0.016
-	stick.bottom_radius = 0.018
-	stick.height = 1.7
-	stick.radial_segments = 12
-	stick.material = wood
-	_add_to(broom, stick, Vector3(0, -0.85, 0))
-	var block := BoxMesh.new()
-	block.size = Vector3(0.42, 0.06, 0.09)
-	block.material = wood
-	_add_to(broom, block, Vector3(0, -1.72, 0))
-	var bristle_mat := _mat(Color(0.32, 0.22, 0.12), 0.95)
+	var blade_steel := StandardMaterial3D.new()
+	blade_steel.albedo_color = Color(0.55, 0.56, 0.58)
+	blade_steel.metallic = 0.85
+	blade_steel.roughness = 0.35
+	blade_steel.cull_mode = BaseMaterial3D.CULL_DISABLED
+
+	# Tırpan: uzun ahşap sap, ortada tutamak, ucunda yere paralel kavisli bıçak
+	var scythe := Node3D.new()
+	scythe.position = Vector3(0.05, 0.1, 0.1)
+	var s_dir := Vector3(-0.35, -0.7, -1.3).normalized()
+	scythe.quaternion = Quaternion(Vector3.UP, -s_dir)
+	tool_root.add_child(scythe)
+	var s_stick := CylinderMesh.new()
+	s_stick.top_radius = 0.017
+	s_stick.bottom_radius = 0.019
+	s_stick.height = 1.6
+	s_stick.radial_segments = 12
+	s_stick.material = wood
+	_add_to(scythe, s_stick, Vector3(0, -0.8, 0))
+	var s_handle := CylinderMesh.new()
+	s_handle.top_radius = 0.014
+	s_handle.bottom_radius = 0.014
+	s_handle.height = 0.16
+	s_handle.radial_segments = 10
+	s_handle.material = wood
+	var sh := _add_to(scythe, s_handle, Vector3(0.07, -0.45, 0))
+	sh.rotation_degrees = Vector3(0, 0, 90)
+	var blade := MeshInstance3D.new()
+	blade.mesh = _scythe_blade(blade_steel)
+	blade.position = Vector3(0, -1.6, 0)
+	blade.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	scythe.add_child(blade)
+	var s_tip := Node3D.new()
+	s_tip.position = Vector3(0, -1.62, 0)
+	scythe.add_child(s_tip)
+
+	# Tırmık: ahşap sap, metal kafa, aşağı bakan dişler
+	var rake := Node3D.new()
+	rake.position = Vector3(0.05, 0.12, 0.12)
+	var r_dir := Vector3(-0.2, -0.75, -1.4).normalized()
+	rake.quaternion = Quaternion(Vector3.UP, -r_dir)
+	tool_root.add_child(rake)
+	var r_stick := CylinderMesh.new()
+	r_stick.top_radius = 0.016
+	r_stick.bottom_radius = 0.018
+	r_stick.height = 1.6
+	r_stick.radial_segments = 12
+	r_stick.material = wood
+	_add_to(rake, r_stick, Vector3(0, -0.8, 0))
+	var bar := BoxMesh.new()
+	bar.size = Vector3(0.42, 0.03, 0.035)
+	bar.material = blade_steel
+	_add_to(rake, bar, Vector3(0, -1.6, 0))
+	var tine := CylinderMesh.new()
+	tine.top_radius = 0.005
+	tine.bottom_radius = 0.004
+	tine.height = 0.1
+	tine.radial_segments = 6
+	tine.material = blade_steel
 	for i in 14:
-		var bristle := BoxMesh.new()
-		bristle.size = Vector3(0.022, 0.13, 0.07)
-		bristle.material = bristle_mat
-		var bx := -0.19 + i * (0.38 / 13.0)
-		var bm := _add_to(broom, bristle, Vector3(bx, -1.81, 0.0))
-		bm.rotation_degrees = Vector3(0, 0, randf_range(-6.0, 6.0))
+		var tx := -0.195 + i * (0.39 / 13.0)
+		var tm := _add_to(rake, tine, Vector3(tx, -1.64, 0.03))
+		tm.rotation_degrees = Vector3(-35, 0, 0)
+	var r_tip := Node3D.new()
+	r_tip.position = Vector3(0, -1.69, 0.06)
+	rake.add_child(r_tip)
 
 	# Basınçlı yıkama tabancası: sarı gövde, kabza, tetik, metal uzatma borusu, nozül, hortum.
 	# Tabanca nişangâha (ekran ortasında ~3 m ileri) bakacak şekilde döndürülür.
@@ -170,8 +212,12 @@ func _build_tools() -> void:
 	mouth.size = Vector3(0.35, 0.07, 0.16)
 	mouth.material = _mat(Color(0.2, 0.2, 0.22), 0.6)
 	_add_to(vac, mouth, Vector3(0, -0.72, 0))
+	var v_tip := Node3D.new()
+	v_tip.position = Vector3(0, -0.76, 0)
+	vac.add_child(v_tip)
 
-	tool_nodes = [broom, gun, vac]
+	tool_nodes = [scythe, rake, gun, vac]
+	head_markers = [s_tip, r_tip, null, v_tip]
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -217,14 +263,21 @@ func _physics_process(delta: float) -> void:
 		use_time += delta
 		match active_tool:
 			0:
-				target_rot = Vector3(0, sin(use_time * 7.0) * 0.32, sin(use_time * 7.0) * -0.08)
+				# Tırpan: geniş, yatay savuruş
+				var sw := sin(use_time * 4.5)
+				target_rot = Vector3(0, sw * 0.55, sw * -0.12)
 			1:
-				tool_root.position += Vector3(randf_range(-0.003, 0.003), randf_range(-0.003, 0.003), 0.012)
+				# Tırmık: ileri uzanıp geri çekme
+				tool_root.position += Vector3(0, 0, sin(use_time * 6.0) * 0.12)
+				target_rot = Vector3(sin(use_time * 6.0) * 0.06, 0, 0)
 			2:
+				tool_root.position += Vector3(randf_range(-0.003, 0.003), randf_range(-0.003, 0.003), 0.012)
+			3:
 				tool_root.position += Vector3(randf_range(-0.0025, 0.0025), randf_range(-0.0025, 0.0025), 0)
 	else:
 		use_time = 0.0
 	tool_root.rotation = tool_root.rotation.lerp(target_rot, clampf(delta * 12.0, 0.0, 1.0))
+	_keep_tool_above_ground()
 
 
 ## Bakış açısını değiştirir (radyan cinsinden yatay/dikey). Kontrolcü ve dokunmatik kullanır.
@@ -269,3 +322,49 @@ func _mat(c: Color, rough: float) -> StandardMaterial3D:
 	m.albedo_color = c
 	m.roughness = rough
 	return m
+
+
+## Aletin ucu zeminin içine girmesin: uç zeminin altındaysa aleti yukarı kaldır
+func _keep_tool_above_ground() -> void:
+	if active_tool >= head_markers.size() or head_markers[active_tool] == null:
+		return
+	var tip: Node3D = head_markers[active_tool]
+	var p := tip.global_position
+	var q := PhysicsRayQueryParameters3D.create(p + Vector3(0, 1.5, 0), p + Vector3(0, -0.5, 0))
+	q.collision_mask = 1
+	q.exclude = [get_rid()]
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	if hit.is_empty():
+		return
+	var ground_y: float = (hit["position"] as Vector3).y + 0.02
+	if p.y < ground_y:
+		tool_root.global_position += Vector3(0, ground_y - p.y, 0)
+
+
+## Tırpan bıçağı: yere paralel, hafif kavisli, uca doğru incelen ince metal şerit
+func _scythe_blade(mat: Material) -> Mesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.set_material(mat)
+	var seg := 14
+	var length := 0.75
+	for i in seg:
+		var t0 := float(i) / seg
+		var t1 := float(i + 1) / seg
+		var a0 := _blade_pt(t0, length)
+		var a1 := _blade_pt(t1, length)
+		var b0 := a0 + Vector3(0, 0, lerpf(0.09, 0.005, t0))
+		var b1 := a1 + Vector3(0, 0, lerpf(0.09, 0.005, t1))
+		st.set_normal(Vector3.UP)
+		st.add_vertex(a0)
+		st.add_vertex(a1)
+		st.add_vertex(b1)
+		st.add_vertex(a0)
+		st.add_vertex(b1)
+		st.add_vertex(b0)
+	return st.commit()
+
+
+## Bıçak sapa dik olarak yana uzanır ve uca doğru öne kıvrılır
+func _blade_pt(t: float, length: float) -> Vector3:
+	return Vector3(-t * length, 0.0, -sin(t * PI * 0.5) * 0.22)
