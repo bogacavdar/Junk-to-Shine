@@ -28,6 +28,7 @@ const TAB_UPGRADES := [
 const SETTINGS_PATH := "user://ayarlar.cfg"
 const IslandScript := preload("res://scripts/island.gd")
 const Kayit := preload("res://scripts/kayit.gd")
+const Gorev := preload("res://scripts/gorevler.gd")
 
 var game = null              # main.gd
 var font_display: Font = null
@@ -52,6 +53,16 @@ var goal_panel: Control
 var goal_title: Label
 var goal_desc: Label
 var goal_bar: ProgressBar
+var goal_head: Label
+var goal_prog: Label
+var msg_panel: Control
+var msg_who: Label
+var msg_text: Label
+var msg_queue: Array = []
+var msg_time := 0.0
+var settings_panel: Control
+var journal_panel: Control
+var journal_list: VBoxContainer
 var crosshair: TextureRect
 var tool_title: Label
 var tool_slots: Array[Button] = []
@@ -385,14 +396,33 @@ func _build_hud() -> void:
 	goal_panel.position = Vector2(1280 - 24 - 252, 24)
 	hud_root.add_child(goal_panel)
 	var gv := _vbox(6, gg[1])
-	var gl := _label("SIRADAKİ BÖLGE", 11, GREEN_TEXT, false, gv)
-	gl.add_theme_constant_override("line_spacing", 0)
+	goal_head = _label("SIRADAKİ BÖLGE", 11, GREEN_TEXT, false, gv)
+	goal_head.add_theme_constant_override("line_spacing", 0)
 	goal_title = _label("", 18, TEXT, true, gv)
 	goal_desc = _label("", 12, MUTED, false, gv)
 	goal_desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	goal_desc.custom_minimum_size = Vector2(220, 0)
-	goal_bar = _bar(220, 6, GREEN)
-	gv.add_child(goal_bar)
+	var gbh := _hbox(10, gv)
+	goal_bar = _bar(160, 6, GREEN)
+	goal_bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	goal_bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	gbh.add_child(goal_bar)
+	goal_prog = _label("", 11, TEXT_2, false, gbh)
+
+	# --- Sol, ortanın altı: telsiz / buluntu mesajı
+	var mg: Array = _glass(18.0, 0.66, Vector4(18, 14, 18, 16))
+	msg_panel = mg[0]
+	msg_panel.custom_minimum_size = Vector2(440, 0)
+	msg_panel.position = Vector2(24, 150)
+	msg_panel.visible = false
+	msg_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud_root.add_child(msg_panel)
+	var mv := _vbox(6, mg[1])
+	msg_who = _label("", 12, GOLD, true, mv)
+	msg_text = _label("", 15, TEXT, false, mv)
+	msg_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	msg_text.custom_minimum_size = Vector2(404, 0)
+	msg_text.add_theme_constant_override("line_spacing", 3)
 
 	# --- Orta: nişangâh
 	crosshair = _icon("nisan", 30, Color.WHITE)
@@ -519,12 +549,24 @@ func _update_hud() -> void:
 	if fi.size() == 2:
 		detector_label.text = "Buluntu sinyali: %d m, %s" % [int(fi[0]), fi[1]]
 
+	var q: Array = game.current_quest()
 	var nz: int = game.next_locked_zone()
-	goal_panel.visible = nz > 0
-	if nz > 0:
-		goal_title.text = "%s açılıyor" % Isl.ZONE_NAMES[nz]
-		goal_desc.text = "%s bölgesinin %%%d'ini temizle ya da dükkândan aç" % [Isl.ZONE_NAMES[nz - 1], int(Isl.ZONE_AUTO * 100.0)]
-		goal_bar.value = clampf(game.island.zone_fraction(nz - 1) / Isl.ZONE_AUTO, 0.0, 1.0)
+	if not q.is_empty():
+		goal_panel.visible = true
+		goal_head.text = "GÖREV %d / %d" % [game.quest_index + 1, Gorev.count()]
+		goal_title.text = q[1]
+		goal_desc.text = Gorev.objective_text(q, game)
+		goal_bar.value = Gorev.progress(q, game, game.quest_base)
+		goal_prog.text = Gorev.progress_text(q, game, game.quest_base)
+	else:
+		goal_panel.visible = nz > 0
+		if nz > 0:
+			goal_head.text = "SIRADAKİ BÖLGE"
+			goal_title.text = "%s açılıyor" % Isl.ZONE_NAMES[nz]
+			goal_desc.text = "%s bölgesinin %%%d'ini temizle ya da dükkândan aç" % [Isl.ZONE_NAMES[nz - 1], int(Isl.ZONE_AUTO * 100.0)]
+			goal_bar.value = clampf(game.island.zone_fraction(nz - 1) / Isl.ZONE_AUTO, 0.0, 1.0)
+			goal_prog.text = ""
+	_update_message(get_process_delta_time())
 
 	crosshair.visible = not game.shop_open
 	prompt_chip.visible = game.near_shop and not game.shop_open
@@ -546,6 +588,30 @@ func _update_hud() -> void:
 		tool_slot_icons[i].texture = load(ICON_DIR + ("kilit" if locked else TOOL_ICONS[i]) + ".svg")
 		tool_slot_icons[i].modulate = TEXT if i == t else (DIM if locked else TEXT_2)
 		tool_slot_nums[i].add_theme_color_override("font_color", GOLD if i == t else (DIM if locked else MUTED))
+
+
+## Telsiz ya da buluntu mesajı: sırayla gösterilir, her biri okunacak kadar ekranda kalır
+func show_message(who: String, text: String) -> void:
+	msg_queue.append([who, text])
+
+
+func _update_message(delta: float) -> void:
+	if msg_time > 0.0:
+		msg_time -= delta
+		if msg_time <= 0.6:
+			msg_panel.modulate.a = clampf(msg_time / 0.6, 0.0, 1.0)
+		if msg_time <= 0.0:
+			msg_panel.visible = false
+		return
+	if msg_queue.is_empty():
+		return
+	var m: Array = msg_queue.pop_front()
+	msg_who.text = str(m[0]).to_upper()
+	msg_text.text = m[1]
+	msg_panel.visible = true
+	msg_panel.reset_size()
+	msg_panel.modulate.a = 1.0
+	msg_time = clampf(3.0 + str(m[1]).length() * 0.055, 5.0, 12.0)
 
 
 func show_banner(text: String) -> void:
@@ -827,6 +893,7 @@ func _build_pause() -> void:
 	pause_sub = _label("Oyun duraklatıldı", 14, MUTED, false, tv)
 	var bv := _vbox(10, left)
 	first_pause_button = _pause_button(bv, "Devam et", "light", func() -> void: game._toggle_pause())
+	_pause_button(bv, "Görev günlüğü", "outline", func() -> void: _show_journal(true))
 	_pause_button(bv, "Ayarlar", "outline", func() -> void: _focus_settings())
 	_pause_button(bv, "Kaydet ve ana menüye dön", "outline", func() -> void: game._save_and_quit())
 	_pause_button(bv, "Oyundan çık", "outline", func() -> void: game._quit_game())
@@ -837,6 +904,23 @@ func _build_pause() -> void:
 	sp.custom_minimum_size = Vector2(600, 470)
 	sp.position = Vector2(1280 - 72 - 600, 125)
 	pause_root.add_child(sp)
+	settings_panel = sp
+
+	# Sağ (aynı yer): görev günlüğü
+	var jg: Array = _glass(24.0, 0.70, Vector4(28, 26, 28, 26))
+	journal_panel = jg[0]
+	journal_panel.custom_minimum_size = Vector2(600, 470)
+	journal_panel.position = sp.position
+	journal_panel.visible = false
+	pause_root.add_child(journal_panel)
+	var jv := _vbox(16, jg[1])
+	_label("Görev günlüğü", 24, TEXT, true, jv)
+	var sc := ScrollContainer.new()
+	sc.custom_minimum_size = Vector2(544, 380)
+	sc.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	jv.add_child(sc)
+	journal_list = _vbox(14, sc)
+	journal_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var sv := _vbox(22, sg[1])
 	var sh := _hbox(8, sv)
 	_label("Ayarlar", 24, TEXT, true, sh)
@@ -918,7 +1002,38 @@ func _confirm_new_game() -> void:
 				_style_button(bb, "gold", 12)
 
 
+func _show_journal(on: bool) -> void:
+	journal_panel.visible = on
+	settings_panel.visible = not on
+	if not on:
+		return
+	for c in journal_list.get_children():
+		c.queue_free()
+	var q: Array = game.current_quest()
+	if not q.is_empty():
+		var cg := _vbox(4, journal_list)
+		_label("ŞU ANKİ GÖREV · %d / %d" % [game.quest_index + 1, Gorev.count()], 11, GOLD, false, cg)
+		_label(q[1], 18, TEXT, true, cg)
+		var ot := _label("%s  ·  %s" % [Gorev.objective_text(q, game), Gorev.progress_text(q, game, game.quest_base)], 13, GREEN_TEXT, false, cg)
+		ot.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		var dt := _label(q[2], 13, TEXT_2, false, cg)
+		dt.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		dt.custom_minimum_size = Vector2(530, 0)
+	_label("MESAJLAR VE NOTLAR", 11, GREEN_TEXT, false, journal_list)
+	if game.journal.is_empty():
+		_label("Henüz mesaj yok.", 13, MUTED, false, journal_list)
+	var j: Array = game.journal.duplicate()
+	j.reverse()
+	for m in j:
+		var mv := _vbox(3, journal_list)
+		_label(str(m[0]), 12, GOLD, true, mv)
+		var t := _label(str(m[1]), 13, TEXT_2, false, mv)
+		t.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		t.custom_minimum_size = Vector2(530, 0)
+
+
 func _focus_settings() -> void:
+	_show_journal(false)
 	_set_settings_tab(settings_tab)
 	settings_tab_buttons[settings_tab].grab_focus()
 
@@ -1045,6 +1160,7 @@ func set_pause_visible(v: bool) -> void:
 	pause_root.visible = v
 	hud_root.visible = not v
 	if v:
+		_show_journal(false)
 		pause_sub.text = "%s · %s, %%%d · %s" % [game.save_name, IslandScript.ZONE_NAMES[maxi(1, game.current_zone)], int(game.island.zone_fraction(maxi(1, game.current_zone)) * 100.0), Kayit.fmt_duration(game.play_time)]
 		for b in pause_root.find_children("*", "Button", true, false):
 			var bb := b as Button

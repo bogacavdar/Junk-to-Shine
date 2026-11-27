@@ -9,6 +9,7 @@ const GrassScript := preload("res://scripts/grass.gd")
 const Kayit := preload("res://scripts/kayit.gd")
 const PropsScript := preload("res://scripts/props.gd")
 const Models := preload("res://scripts/models.gd")
+const Gorev := preload("res://scripts/gorevler.gd")
 
 # Çöp türleri: [dosya, boyut (m), değer, sıklık, renk (dokusu eksik olanlar için, yoksa null)]
 const TRASH_TYPES := [
@@ -131,6 +132,14 @@ var world_seed := 0
 var master_volume := 0.8
 var paused := false
 var autosave_timer := 0.0
+# Görevler (scripts/gorevler.gd)
+var quest_index := 0
+var quest_base := {}
+var quest_timer := 2.5         # yeni oyunda ilk telsiz mesajı biraz sonra gelsin
+var quest_announced := false
+var stat_trash := 0            # toplam toplanan çöp
+var stat_sells := 0            # konteynerde satış sayısı
+var journal: Array = []        # okunmuş mesajlar: [kimden, metin]
 
 # --- Yapraklar (binlerce, fizik yok) ---
 
@@ -964,6 +973,7 @@ func _collect_trash(body: RigidBody3D) -> void:
 	var value := float(body.get_meta("value", 3)) * money_mult()
 	bag += 1
 	bag_value += value
+	stat_trash += 1
 	if bag >= bag_capacity() and cart_rate() > 0.0:
 		_auto_sell()
 	body.freeze_mode = RigidBody3D.FREEZE_MODE_KINEMATIC
@@ -994,6 +1004,7 @@ func _auto_sell() -> void:
 
 
 func _sell() -> void:
+	stat_sells += 1
 	var earned := bag_value
 	money += earned
 	income_total += earned
@@ -1011,6 +1022,7 @@ func _update_zones(delta: float) -> void:
 	if zone_timer > 0.0:
 		return
 	zone_timer = 0.5
+	_update_quest()
 	var n: int = IslandScript.ZONE_NAMES.size()
 	# Kendiliğinden açılma: önceki bölge yeterince temizse
 	for zn in range(2, n):
@@ -1027,6 +1039,57 @@ func _update_zones(delta: float) -> void:
 			_show_banner("%s TERTEMİZ!  +%s" % [str(IslandScript.ZONE_NAMES[zn]).to_upper(), _fmt(reward)])
 			for i in 8:
 				get_tree().create_timer(0.08 * i).timeout.connect(_play_blip.bind(coin_stream, 0.8 + i * 0.1, -4.0))
+
+
+# =====================================================================
+# GÖREVLER
+# =====================================================================
+
+func current_quest() -> Array:
+	return Gorev.get_quest(quest_index)
+
+
+func _message(who: String, text: String) -> void:
+	if journal.is_empty() or journal[-1][1] != text:
+		journal.append([who, text])
+	if journal.size() > 80:
+		journal.pop_front()
+	hud.show_message(who, text)
+
+
+func _update_quest() -> void:
+	var q := current_quest()
+	if q.is_empty():
+		return
+	if not quest_announced:
+		quest_timer -= 0.5
+		if quest_timer > 0.0:
+			return
+		quest_announced = true
+		_message(q[0], q[2])
+	if not Gorev.is_done(q, self, quest_base):
+		return
+	var reward: float = float(q[6]) * IslandScript.ZONE_MULT[int(q[7])] * money_mult()
+	money += reward
+	income_total += reward
+	_show_banner("GÖREV TAMAM: %s  +%s" % [q[1], _fmt(reward)])
+	for k in 6:
+		get_tree().create_timer(0.09 * k).timeout.connect(_play_blip.bind(coin_stream, 0.9 + k * 0.1, -4.0))
+	quest_index += 1
+	quest_base = Gorev.make_base(self)
+	quest_announced = false
+	quest_timer = 4.5     # bir sonraki telsiz mesajı afiş kaybolunca
+	if quest_index >= Gorev.count():
+		quest_announced = true
+		get_tree().create_timer(4.5).timeout.connect(func() -> void: _message(Gorev.SELIN, Gorev.ENDING))
+	_save_game()
+
+
+## Eski kayıtlar için: zaten yapılmış görevleri ödülsüz geç
+func _skip_done_quests() -> void:
+	while quest_index < Gorev.count() and Gorev.is_done(current_quest(), self, quest_base):
+		quest_index += 1
+		quest_base = Gorev.make_base(self)
 
 
 func _unlock_zone(zn: int) -> void:
@@ -1442,23 +1505,35 @@ func _add_child_mesh(parent: Node3D, mesh: Mesh, pos: Vector3) -> MeshInstance3D
 # BULUNTULAR (kirin altından çıkan gizli eşyalar)
 # =====================================================================
 
+# [ad, değer, bölge]  — notları gorevler.gd FIND_NOTES içinde
 const FINDS := [
-	["Eski bozuk para", 15], ["Kayıp yüzük", 60], ["Paslı anahtar", 20], ["Oyuncak araba", 30],
-	["Antika cep saati", 80], ["Gümüş kaşık", 35], ["Cam misket", 15], ["Eski fotoğraf", 25],
+	["Eski bozuk para", 15, 1], ["Kayıp yüzük", 60, 1], ["Paslı anahtar", 20, 1],
+	["Defter sayfası", 40, 2], ["Oyuncak araba", 30, 2],
+	["Antika cep saati", 80, 3], ["Defter sayfası", 40, 3],
+	["Gümüş kaşık", 35, 4], ["Defter sayfası", 40, 4],
+	["Eski fotoğraf", 50, 5], ["Cam misket", 15, 5],
+	["Defter sayfası", 60, 6],
 ]
 
 func _place_finds() -> void:
-	var i := 0
-	var tries := 0
-	while i < FINDS.size() and tries < 1000:
-		tries += 1
-		var x := spawn_point.x + randf_range(-55.0, 55.0)
-		var z := spawn_point.z + randf_range(-55.0, 20.0)
-		var h: float = island.height_at(x, z)
-		if h < 0.6:
-			continue
-		find_positions.append(Vector3(x, h, z))
-		i += 1
+	# Her buluntu kendi bölgesinin içinde, kara üstünde rastgele bir yere
+	for info: Array in FINDS:
+		var zn: int = int(info[2])
+		var placed := false
+		for t in 4000:
+			var x := randf_range(-300.0, 300.0)
+			var z := randf_range(-300.0, 300.0)
+			if zn == 1:
+				x = spawn_point.x + randf_range(-55.0, 55.0)
+				z = spawn_point.z + randf_range(-55.0, 20.0)
+			var h: float = island.height_at(x, z)
+			if h < 0.6 or island.zone_at(x, z) != zn:
+				continue
+			find_positions.append(Vector3(x, h, z))
+			placed = true
+			break
+		if not placed:
+			find_positions.append(Vector3(spawn_point.x, island.height_at(spawn_point.x, spawn_point.z), spawn_point.z))
 
 
 func _check_finds() -> void:
@@ -1466,6 +1541,8 @@ func _check_finds() -> void:
 		if found_finds.has(i):
 			continue
 		var p: Vector3 = find_positions[i]
+		if not island.zone_unlocked(int(FINDS[i][2])):
+			continue
 		if island.sample_max(p) < CLEAN_THRESHOLD:
 			_reveal_find(i)
 
@@ -1473,11 +1550,12 @@ func _check_finds() -> void:
 func _reveal_find(i: int) -> void:
 	found_finds.append(i)
 	var info: Array = FINDS[i]
-	var value: float = float(info[1]) * money_mult() * 5.0
+	var value: float = float(info[1]) * IslandScript.ZONE_MULT[int(info[2])] * money_mult() * 5.0
 	money += value
 	income_total += value
 	var p: Vector3 = find_positions[i]
 	_float_text(p + Vector3(0, 1.4, 0), "Buldun: %s!  +%s" % [info[0], _fmt(value)], Color(1.0, 0.85, 0.3))
+	_message("Buluntu · %s" % info[0], Gorev.FIND_NOTES[i] if i < Gorev.FIND_NOTES.size() else str(info[0]))
 	for k in 5:
 		get_tree().create_timer(0.07 * k).timeout.connect(_play_blip.bind(coin_stream, 1.0 + k * 0.12, -4.0))
 	# Altın parıltı patlaması
@@ -1552,6 +1630,7 @@ func _save_game() -> void:
 		"zones": {"unlocked": island.unlocked_mask, "done": zones_done, "spawned": zones_spawned},
 		"trash": trash,
 		"finds": found_finds,
+		"quests": {"i": quest_index, "base": quest_base, "trash": stat_trash, "sells": stat_sells, "announced": quest_announced, "journal": journal},
 		"player": [player.global_position.x, player.global_position.z],
 		"yaw": player.rotation.y,
 		"volume": master_volume,
@@ -1591,6 +1670,23 @@ func _apply_save(d: Dictionary) -> void:
 
 	for i in d.get("finds", []):
 		found_finds.append(int(i))
+
+	var qd: Dictionary = d.get("quests", {})
+	stat_trash = int(qd.get("trash", 0))
+	stat_sells = int(qd.get("sells", 0))
+	quest_index = int(qd.get("i", 0))
+	quest_base = qd.get("base", {})
+	journal = qd.get("journal", [])
+	quest_announced = bool(qd.get("announced", false))
+	if qd.is_empty():
+		quest_base = Gorev.make_base(self)
+		_skip_done_quests()
+	if quest_announced:
+		quest_timer = 0.0
+		var q := current_quest()
+		if not q.is_empty():
+			quest_announced = false   # yüklemede görevi kısa bir telsizle hatırlat
+			quest_timer = 2.0
 
 	var pp: Array = d.get("player", [])
 	if pp.size() == 2:

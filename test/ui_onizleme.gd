@@ -44,6 +44,10 @@ func _ready() -> void:
 	hud = HudScript.new()
 	add_child(hud)
 	hud.setup(self)
+	quest_index = 6
+	quest_base = {}
+	journal = [["Selin · telsiz", "Sesim geliyor mu? Fırtınadan beri adaya kimse çıkmadı. İskelenin etrafındaki kuru otlardan başla, tırpanı geniş savur."], ["Buluntu · Paslı anahtar", "Paslı bir anahtar. Nuri Dede'nin kulübesinin anahtarı olabilir."]]
+	hud.show_message("Selin · telsiz", "Sahile fırtınadan kalma yosun vurmuş. Tırmığını Sv 12'ye çıkar, kum tekrar görünsün.")
 	for a: String in OS.get_cmdline_user_args():
 		if a.begins_with("--ekran="):
 			shot_dir = a.substr(8)
@@ -73,6 +77,9 @@ func _process(_delta: float) -> void:
 			hud._set_settings_tab(2)
 		90:
 			_save_shot("5_menu_kontroller.png")
+			hud._show_journal(true)
+		105:
+			_save_shot("7_gorev_gunlugu.png")
 			get_tree().quit()
 
 
