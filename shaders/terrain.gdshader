@@ -99,7 +99,10 @@ void fragment() {
 		vec2 ts = vec2(1.0 / 33.0);
 		bool edge = false;
 		for (int k = 0; k < 4; k++) {
-			vec2 o = (k == 0) ? vec2(ts.x, 0.0) : (k == 1) ? vec2(-ts.x, 0.0) : (k == 2) ? vec2(0.0, ts.y) : vec2(0.0, -ts.y);
+			vec2 o = vec2(0.0, -ts.y);
+			if (k == 0) { o = vec2(ts.x, 0.0); }
+			else if (k == 1) { o = vec2(-ts.x, 0.0); }
+			else if (k == 2) { o = vec2(0.0, ts.y); }
 			int nz = int(round(texture(zone_map, clamp(muv + o, 0.0, 1.0)).r * 255.0 / 32.0));
 			if (nz > 0 && ((unlocked_zones >> nz) & 1) == 1) { edge = true; }
 		}
