@@ -18,14 +18,16 @@ const UPGRADE_ICON := {
 	"scythe": "tirpan", "scythe_w": "tirpan", "broom": "tirmik", "broom_w": "tirmik",
 	"pressure": "yikayici", "nozzle": "yikayici", "vacuum": "supurge",
 	"bag": "canta", "shoes": "ayakkabi", "bonus": "prim",
+	"magnet": "miknatis", "cart": "araba", "detector": "dedektor",
 }
 const TAB_UPGRADES := [
 	["scythe", "scythe_w", "broom", "broom_w", "pressure", "nozzle", "vacuum"],
-	["bag", "shoes", "bonus"],
+	["bag", "shoes", "bonus", "magnet", "cart", "detector"],
 	[],   # Bölgeler
 ]
 const SETTINGS_PATH := "user://ayarlar.cfg"
 const IslandScript := preload("res://scripts/island.gd")
+const Kayit := preload("res://scripts/kayit.gd")
 
 var game = null              # main.gd
 var font_display: Font = null
@@ -43,6 +45,9 @@ var zone_bar: ProgressBar
 var zone_pct: Label
 var zone_mult: Label
 var island_label: Label
+var detector_chip: Control
+var detector_label: Label
+var buy_buttons: Array[Button] = []
 var goal_panel: Control
 var goal_title: Label
 var goal_desc: Label
@@ -84,12 +89,17 @@ var first_pause_button: Button
 var income_samples: Array = []
 
 
-func setup(g) -> void:
-	game = g
-	layer = 5
+## Sadece görünüm araçlarını hazırla (ana menü de kullanır)
+func init_style() -> void:
 	glass_shader = load("res://shaders/glass.gdshader")
 	font_display = _try_font(["res://assets/fonts/SpaceGrotesk-Variable.ttf"], 700)
 	font_body = _try_font(["res://assets/fonts/Inter-Variable.ttf"], 450)
+
+
+func setup(g) -> void:
+	game = g
+	layer = 5
+	init_style()
 	_load_settings()
 	if game.is_mobile and not FileAccess.file_exists(SETTINGS_PATH):
 		settings["quality"] = 0
@@ -359,6 +369,14 @@ func _build_hud() -> void:
 	zrow.add_child(chip)
 	island_label = _shadow(_label("", 12, TEXT_2, false, zv))
 	island_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	var dg: Array = _glass(999.0, 0.58, Vector4(12, 5, 14, 5))
+	detector_chip = dg[0]
+	detector_chip.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	var dh := _hbox(8, dg[1])
+	dh.add_child(_icon("dedektor", 18, GOLD))
+	detector_label = _label("", 13, TEXT, false, dh)
+	zv.add_child(detector_chip)
+	detector_chip.visible = false
 
 	# --- Sağ üst: sıradaki bölge hedefi
 	var gg: Array = _glass(18.0, 0.58)
@@ -496,6 +514,11 @@ func _update_hud() -> void:
 	var m2: float = float(game.island.total_clean()) / 40.96
 	island_label.text = "Ada %%%s temiz · %s m²" % [("%.1f" % game.clean_pct).replace(".", ","), game._fmt(m2)]
 
+	var fi: Array = game.nearest_find_info()
+	detector_chip.visible = fi.size() == 2
+	if fi.size() == 2:
+		detector_label.text = "Buluntu sinyali: %d m, %s" % [int(fi[0]), fi[1]]
+
 	var nz: int = game.next_locked_zone()
 	goal_panel.visible = nz > 0
 	if nz > 0:
@@ -577,6 +600,14 @@ func _build_shop() -> void:
 	var sp := Control.new()
 	sp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head.add_child(sp)
+	var bb := _hbox(4, head)
+	for pair in [[1, "×1"], [10, "×10"], [-1, "MAKS"]]:
+		var b := _button(pair[1], "pill", Vector2(0, 36), 13, false)
+		var mode: int = pair[0]
+		b.pressed.connect(func() -> void: _set_buy_mode(mode))
+		b.set_meta("mode", mode)
+		bb.add_child(b)
+		buy_buttons.append(b)
 	head.add_child(_icon("para", 22, Color.WHITE))
 	shop_money = _label("", 22, TEXT, true, head)
 	shop_close = Button.new()
@@ -604,6 +635,17 @@ func _build_shop() -> void:
 		foot.add_child(_keycap("E"))
 		_label("kapat", 12, MUTED, false, foot)
 	_set_shop_tab(0)
+	_set_buy_mode(1)
+
+
+func _set_buy_mode(mode: int) -> void:
+	game.buy_mode = mode
+	for b in buy_buttons:
+		var on: bool = int(b.get_meta("mode")) == mode
+		_style_button(b, "pill_on" if on else "pill", 18)
+		var st: StyleBoxFlat = b.get_theme_stylebox("normal")
+		st.content_margin_left = 12
+		st.content_margin_right = 12
 
 
 func _set_shop_tab(i: int) -> void:
@@ -652,7 +694,7 @@ func _card_shell(icon_name: String) -> Array:
 	var bar := _bar(220, 4, GREEN)
 	bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	info.add_child(bar)
-	var btn := _button("", "gold", Vector2(116, 44), 15)
+	var btn := _button("", "gold", Vector2(132, 44), 15)
 	btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	row.add_child(btn)
 	shop_grid.add_child(card)
@@ -695,7 +737,8 @@ func _update_shop() -> void:
 			var u: Dictionary = game.upgrades[c["idx"]]
 			var l: int = game.lvl(c["id"])
 			(c["name"] as Label).text = u["name"]
-			(c["lvl"] as Label).text = "Sv %d" % l
+			var nm: int = game.next_milestone_level(l) if int(u["max"]) < 0 else -1
+			(c["lvl"] as Label).text = ("Sv %d · taş Sv %d (×3)" % [l, nm]) if nm > 0 else "Sv %d" % l
 			(c["eff"] as Label).text = game.upgrade_effect(c["id"])
 			var mx: int = u["max"]
 			(c["bar"] as ProgressBar).value = (float(l) / float(mx)) if mx > 0 else (float(l % 10) / 10.0)
@@ -704,8 +747,9 @@ func _update_shop() -> void:
 				btn.disabled = true
 				_set_btn_style(c, "green")
 			else:
-				var price: float = game.upgrade_price(c["idx"])
-				btn.text = game._fmt(price)
+				var n: int = game.buy_count(c["idx"])
+				var price: float = game.upgrade_price_n(c["idx"], n)
+				btn.text = game._fmt(price) if n == 1 else "+%d · %s" % [n, game._fmt(price)]
 				var ok: bool = game.money >= price
 				btn.disabled = not ok
 				_set_btn_style(c, "gold" if ok else "dim")
@@ -784,9 +828,8 @@ func _build_pause() -> void:
 	var bv := _vbox(10, left)
 	first_pause_button = _pause_button(bv, "Devam et", "light", func() -> void: game._toggle_pause())
 	_pause_button(bv, "Ayarlar", "outline", func() -> void: _focus_settings())
-	_pause_button(bv, "Kaydet ve çık", "outline", func() -> void: game._save_and_quit())
-	var ng := _pause_button(bv, "Yeni oyun başlat", "outline", func() -> void: _confirm_new_game())
-	ng.set_meta("confirm", false)
+	_pause_button(bv, "Kaydet ve ana menüye dön", "outline", func() -> void: game._save_and_quit())
+	_pause_button(bv, "Oyundan çık", "outline", func() -> void: game._quit_game())
 
 	# Sağ: ayarlar paneli
 	var sg: Array = _glass(24.0, 0.70, Vector4(28, 26, 28, 26))
@@ -1002,7 +1045,7 @@ func set_pause_visible(v: bool) -> void:
 	pause_root.visible = v
 	hud_root.visible = not v
 	if v:
-		pause_sub.text = "Oyun duraklatıldı · %s, %%%d" % [IslandScript.ZONE_NAMES[maxi(1, game.current_zone)], int(game.island.zone_fraction(maxi(1, game.current_zone)) * 100.0)]
+		pause_sub.text = "%s · %s, %%%d · %s" % [game.save_name, IslandScript.ZONE_NAMES[maxi(1, game.current_zone)], int(game.island.zone_fraction(maxi(1, game.current_zone)) * 100.0), Kayit.fmt_duration(game.play_time)]
 		for b in pause_root.find_children("*", "Button", true, false):
 			var bb := b as Button
 			if bb.has_meta("confirm") and bb.get_meta("confirm"):

@@ -6,6 +6,7 @@ const PlayerScript := preload("res://scripts/player.gd")
 const IslandScript := preload("res://scripts/island.gd")
 const HudScript := preload("res://scripts/hud.gd")
 const GrassScript := preload("res://scripts/grass.gd")
+const Kayit := preload("res://scripts/kayit.gd")
 const PropsScript := preload("res://scripts/props.gd")
 const Models := preload("res://scripts/models.gd")
 
@@ -53,7 +54,12 @@ const UPGRADES := [
 	{"id": "vacuum", "name": "Elektrik süpürgesi", "base": 120.0, "growth": 1.25, "max": 25},
 	{"id": "shoes", "name": "Koşu ayakkabısı", "base": 60.0, "growth": 1.45, "max": 15},
 	{"id": "bonus", "name": "Geri dönüşüm primi", "base": 80.0, "growth": 1.2, "max": -1},
+	{"id": "magnet", "name": "Mıknatıs", "base": 90.0, "growth": 1.4, "max": 20},
+	{"id": "cart", "name": "El arabası", "base": 600.0, "growth": 1.6, "max": 10},
+	{"id": "detector", "name": "Buluntu dedektörü", "base": 250.0, "growth": 1.5, "max": 10},
 ]
+# Kilometre taşları: sınırsız yükseltmeler bu seviyelere ulaşınca gücü ayrıca ×3 olur
+const MILESTONES := [25, 50, 100, 200, 400]
 const MONEY_PER_PIXEL := 0.04    # temizlenen her piksel (temel)
 const WALK_PICKUP := 1.3                      # üstünden geçince toplama mesafesi
 
@@ -66,6 +72,7 @@ const TOOL_NAMES := ["Tırpan", "Tırmık", "Yıkayıcı", "Elk. süpürgesi"]
 
 var current_tool := TOOL_SCYTHE
 var levels := {}            # yükseltme id -> seviye
+var buy_mode := 1          # dükkânda toplu alım: 1, 10 ya da -1 (maks)
 var vacuum_level := 0       # levels["vacuum"] kopyası (sık kullanılıyor)
 var vacuum_active := false
 var vacuum_point := Vector3.ZERO
@@ -148,7 +155,14 @@ var water_stream: MeshInstance3D
 
 func _ready() -> void:
 	# Dünya sabit bir tohumla kurulur ki kayıttan yüklerken her şey aynı yerde olsun
+	Kayit.migrate()
+	save_path = Kayit.path(Kayit.current_slot())
 	var save := _load_save()
+	save_name = str(save.get("name", ""))
+	if save_name == "":
+		save_name = Kayit.pending_name() if Kayit.pending_name() != "" else "Ada %d" % Kayit.current_slot()
+	play_time = float(save.get("play_time", 0.0))
+	created_at = int(save.get("created", Time.get_unix_time_from_system()))
 	randomize()
 	world_seed = int(save.get("seed", randi()))
 	seed(world_seed)
@@ -666,6 +680,8 @@ func _build_hud() -> void:
 
 
 func _process(delta: float) -> void:
+	if not paused:
+		play_time += delta
 	if shot_dir != "":
 		_screenshot_step()
 	if paused:
@@ -776,7 +792,7 @@ func _physics_process(_delta: float) -> void:
 		# Üstünden yürüyerek toplama
 		var to_player: Vector3 = ppos - body.global_position
 		to_player.y = 0.0
-		if to_player.length() < WALK_PICKUP:
+		if to_player.length() < pickup_radius():
 			_collect_trash(body)
 			full = bag >= bag_capacity()
 			continue
@@ -948,6 +964,8 @@ func _collect_trash(body: RigidBody3D) -> void:
 	var value := float(body.get_meta("value", 3)) * money_mult()
 	bag += 1
 	bag_value += value
+	if bag >= bag_capacity() and cart_rate() > 0.0:
+		_auto_sell()
 	body.freeze_mode = RigidBody3D.FREEZE_MODE_KINEMATIC
 	body.freeze = true
 	body.collision_layer = 0
@@ -962,6 +980,17 @@ func _collect_trash(body: RigidBody3D) -> void:
 	combo_timer = 1.0
 	_play_blip(blip_stream, 1.0 + minf(combo, 12) * 0.06 + randf() * 0.05, -6.0)
 	_float_text(body.global_position + Vector3(0, 1.0, 0), "+" + _fmt(value), Color(1.0, 0.85, 0.3))
+
+
+## El arabası: konteynere gitmeden, düşük oranla sat
+func _auto_sell() -> void:
+	var earned := bag_value * cart_rate()
+	money += earned
+	income_total += earned
+	_float_text(player.global_position + Vector3(0, 2.2, 0), "El arabası: +%s" % _fmt(earned), Color(0.5, 1.0, 0.6))
+	_play_blip(coin_stream, 1.1, -8.0)
+	bag = 0
+	bag_value = 0.0
 
 
 func _sell() -> void:
@@ -1059,9 +1088,66 @@ func _update_progress() -> void:
 func lvl(id: String) -> int:
 	return int(levels.get(id, 0))
 
-## Güç çarpanı: seviye başına +%10, her 10 seviyede ×2
+## Güç çarpanı: seviye başına +%10, her 10 seviyede ×2, her kilometre taşında ayrıca ×3
 func power_mult(l: int) -> float:
-	return (1.0 + 0.1 * l) * pow(2.0, floori(l / 10.0))
+	var m := (1.0 + 0.1 * l) * pow(2.0, floori(l / 10.0))
+	for ms: int in MILESTONES:
+		if l >= ms:
+			m *= 3.0
+	return m
+
+
+## Sınırsız yükseltmede bir sonraki kilometre taşı (yoksa -1)
+func next_milestone_level(l: int) -> int:
+	for ms: int in MILESTONES:
+		if l < ms:
+			return ms
+	return -1
+
+
+## Dedektör: menzildeki en yakın bulunmamış buluntu -> [mesafe, yön yazısı]; yoksa boş
+func nearest_find_info() -> Array:
+	var rng := detector_range()
+	if rng <= 0.0 or player == null:
+		return []
+	var pp := player.global_position
+	var best := -1
+	var bd := rng
+	for i in find_positions.size():
+		if found_finds.has(i):
+			continue
+		var d := Vector2(find_positions[i].x - pp.x, find_positions[i].z - pp.z).length()
+		if d < bd:
+			bd = d
+			best = i
+	if best < 0:
+		return []
+	var to := find_positions[best] - pp
+	var fwd := -player.global_transform.basis.z
+	var ang := rad_to_deg(atan2(fwd.x * to.z - fwd.z * to.x, fwd.x * to.x + fwd.z * to.z))
+	var yon := "önünde"
+	if absf(ang) > 135.0:
+		yon = "arkanda"
+	elif ang > 35.0:
+		yon = "sağında"
+	elif ang < -35.0:
+		yon = "solunda"
+	return [bd, yon]
+
+
+func pickup_radius() -> float:
+	return WALK_PICKUP + 0.25 * lvl("magnet")
+
+
+## El arabası: çanta dolunca otomatik satış oranı (0 = yok)
+func cart_rate() -> float:
+	var l := lvl("cart")
+	return 0.0 if l == 0 else minf(1.0, 0.7 + 0.03 * l)
+
+
+func detector_range() -> float:
+	var l := lvl("detector")
+	return 0.0 if l == 0 else 15.0 + 6.0 * l
 
 func money_mult() -> float:
 	return power_mult(lvl("bonus"))
@@ -1095,6 +1181,41 @@ func upgrade_price(i: int) -> float:
 	var u: Dictionary = UPGRADES[i]
 	return float(u["base"]) * pow(float(u["growth"]), lvl(u["id"]))
 
+
+## Kalan seviye hakkı (sınırsızsa çok büyük)
+func upgrade_room(i: int) -> int:
+	var u: Dictionary = UPGRADES[i]
+	return 1000000 if int(u["max"]) < 0 else maxi(0, int(u["max"]) - lvl(u["id"]))
+
+
+## n seviyenin toplam fiyatı (geometrik toplam)
+func upgrade_price_n(i: int, n: int) -> float:
+	if n <= 0:
+		return 0.0
+	var g: float = UPGRADES[i]["growth"]
+	return upgrade_price(i) * (pow(g, n) - 1.0) / (g - 1.0)
+
+
+## Bu parayla en fazla kaç seviye alınabilir
+func upgrade_affordable(i: int, budget: float) -> int:
+	var g: float = UPGRADES[i]["growth"]
+	var p0 := upgrade_price(i)
+	if budget < p0:
+		return 0
+	var n := int(floor(log(budget * (g - 1.0) / p0 + 1.0) / log(g)))
+	n = mini(n, upgrade_room(i))
+	while n > 0 and upgrade_price_n(i, n) > budget:
+		n -= 1
+	return n
+
+
+## Dükkândaki seçime göre (1, 10 ya da -1 = maks) alınacak seviye sayısı
+func buy_count(i: int) -> int:
+	var room := upgrade_room(i)
+	if buy_mode < 0:
+		return maxi(1, upgrade_affordable(i, money))
+	return mini(buy_mode, maxi(1, room))
+
 func upgrade_maxed(i: int) -> bool:
 	var u: Dictionary = UPGRADES[i]
 	return int(u["max"]) >= 0 and lvl(u["id"]) >= int(u["max"])
@@ -1122,6 +1243,12 @@ func upgrade_effect(id: String) -> String:
 			return "Hız +%%%d" % (lvl(id) * 5)
 		"bonus":
 			return "Kazanç ×%s" % _fmt_mult(money_mult())
+		"magnet":
+			return ("Toplama mesafesi %.2f m" % pickup_radius()).replace(".", ",")
+		"cart":
+			return "Kilitli" if lvl(id) == 0 else "Dolunca satar · değerin %%%d'i" % int(cart_rate() * 100.0)
+		"detector":
+			return "Kilitli" if lvl(id) == 0 else "Menzil %d m" % int(detector_range())
 	return ""
 
 
@@ -1141,19 +1268,30 @@ func _on_shop_button(i: int) -> void:
 		return
 	if upgrade_maxed(i):
 		return
-	if not _try_pay(upgrade_price(i)):
+	var n := buy_count(i)
+	if not _try_pay(upgrade_price_n(i, n)):
 		return
 	var u: Dictionary = UPGRADES[i]
 	var id: String = u["id"]
-	levels[id] = lvl(id) + 1
+	var before := lvl(id)
+	levels[id] = before + n
 	_apply_levels()
-	if id == "vacuum" and vacuum_level == 1:
-		_upgrade_text("Elektrik süpürgesi açıldı! [3]")
+	if id == "vacuum" and before == 0:
+		_upgrade_text("Elektrik süpürgesi açıldı! [4]")
 		_select_tool(TOOL_VACUUM)
+	elif id == "cart" and before == 0:
+		_upgrade_text("El arabası: çanta dolunca kendiliğinden satar")
+	elif id == "detector" and before == 0:
+		_upgrade_text("Dedektör: yakındaki buluntular ekranda görünür")
 	else:
 		_upgrade_text("%s Sv %d" % [u["name"], lvl(id)])
-	if lvl(id) % 10 == 0 and int(u["max"]) < 0:
-		_float_text(player.global_position + Vector3(0, 3.1, 0), "×2 SIÇRAMA!", Color(1.0, 0.8, 0.3))
+	if int(u["max"]) < 0:
+		var after := lvl(id)
+		for ms: int in MILESTONES:
+			if before < ms and after >= ms:
+				_float_text(player.global_position + Vector3(0, 3.4, 0), "KİLOMETRE TAŞI! ×3", Color(1.0, 0.75, 0.25))
+		if floori(after / 10.0) > floori(before / 10.0):
+			_float_text(player.global_position + Vector3(0, 3.1, 0), "×2 SIÇRAMA!", Color(1.0, 0.8, 0.3))
 
 
 func _upgrade_text(text: String) -> void:
@@ -1374,12 +1512,15 @@ func _reveal_find(i: int) -> void:
 # KAYIT
 # =====================================================================
 
-const SAVE_PATH := "user://ada_kayit.json"
+var save_path := "user://kayit_1.json"
+var save_name := ""
+var play_time := 0.0
+var created_at := 0
 
 func _load_save() -> Dictionary:
-	if not FileAccess.file_exists(SAVE_PATH):
+	if not FileAccess.file_exists(save_path):
 		return {}
-	var f := FileAccess.open(SAVE_PATH, FileAccess.READ)
+	var f := FileAccess.open(save_path, FileAccess.READ)
 	if f == null:
 		return {}
 	var parsed: Variant = JSON.parse_string(f.get_as_text())
@@ -1396,7 +1537,12 @@ func _save_game() -> void:
 			var br := b.rotation
 			trash.append([int(b.get_meta("type_index", 0)), bp.x, bp.y, bp.z, br.x, br.y, br.z])
 	var data := {
-		"version": 1,
+		"version": 2,
+		"name": save_name,
+		"play_time": play_time,
+		"created": created_at,
+		"last_played": int(Time.get_unix_time_from_system()),
+		"summary": {"zone": current_zone, "pct": clean_pct},
 		"seed": world_seed,
 		"money": money,
 		"levels": levels,
@@ -1410,7 +1556,7 @@ func _save_game() -> void:
 		"yaw": player.rotation.y,
 		"volume": master_volume,
 	}
-	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
+	var f := FileAccess.open(save_path, FileAccess.WRITE)
 	if f != null:
 		f.store_string(JSON.stringify(data))
 
@@ -1551,12 +1697,19 @@ func _set_volume(v: float) -> void:
 
 
 func _new_game() -> void:
-	if FileAccess.file_exists(SAVE_PATH):
-		DirAccess.remove_absolute(ProjectSettings.globalize_path(SAVE_PATH))
+	if FileAccess.file_exists(save_path):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(save_path))
 	get_tree().reload_current_scene()
 
 
+## Kaydet ve ana menüye dön
 func _save_and_quit() -> void:
+	_save_game()
+	get_tree().paused = false
+	get_tree().change_scene_to_file("res://menu.tscn")
+
+
+func _quit_game() -> void:
 	_save_game()
 	get_tree().quit()
 
