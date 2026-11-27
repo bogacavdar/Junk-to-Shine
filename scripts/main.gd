@@ -5,6 +5,7 @@ extends Node3D
 const PlayerScript := preload("res://scripts/player.gd")
 const IslandScript := preload("res://scripts/island.gd")
 const HudScript := preload("res://scripts/hud.gd")
+const GrassScript := preload("res://scripts/grass.gd")
 const PropsScript := preload("res://scripts/props.gd")
 const Models := preload("res://scripts/models.gd")
 
@@ -78,6 +79,8 @@ var bag_value := 0.0
 # --- Kir maskesi ---
 var island = null   # island.gd
 var hud = null      # hud.gd
+var grass = null    # grass.gd (yakındaki 3D otlar)
+var mist: CPUParticles3D   # yıkayıcı sisi
 var income_total := 0.0   # toplam kazanç (arayüzdeki kazanç hızı için)
 var shot_dir := ""        # test: ekran görüntülerinin kaydedileceği klasör (komut satırından)
 var shot_frame := 0
@@ -156,6 +159,9 @@ func _ready() -> void:
 	_build_ocean()
 	_build_container()
 	_build_player()
+	grass = GrassScript.new()
+	add_child(grass)
+	grass.setup(island, player)
 	_apply_levels()
 	_place_finds()
 	randomize()
@@ -560,24 +566,80 @@ func _build_tool_visuals() -> void:
 	aim_ring.mesh = disk
 	add_child(aim_ring)
 
-	# Alet parçacıkları (su, toz ya da emilen kırıntı)
+	# Alet parçacıkları: yumuşak kenarlı kartlar (su zerresi, ot kırpıntısı, yaprak, toz)
+	var soft := GradientTexture2D.new()
+	var sg := Gradient.new()
+	sg.set_color(0, Color(1, 1, 1, 1))
+	sg.set_color(1, Color(1, 1, 1, 0))
+	sg.add_point(0.55, Color(1, 1, 1, 0.75))
+	soft.gradient = sg
+	soft.fill = GradientTexture2D.FILL_RADIAL
+	soft.fill_from = Vector2(0.5, 0.5)
+	soft.fill_to = Vector2(1.0, 0.5)
+	soft.width = 64
+	soft.height = 64
+
 	spray = CPUParticles3D.new()
 	spray.emitting = false
-	spray.amount = 60
-	spray.lifetime = 0.45
-	var drop := SphereMesh.new()
-	drop.radius = 0.05
-	drop.height = 0.1
-	drop.radial_segments = 4
-	drop.rings = 2
+	if mist != null:
+		mist.emitting = false
+	spray.amount = 90
+	spray.lifetime = 0.55
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.03, 0.1)
 	spray_mat = StandardMaterial3D.new()
-	spray_mat.albedo_color = Color(0.7, 0.9, 1.0)
-	spray_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	drop.material = spray_mat
-	spray.mesh = drop
+	spray_mat.albedo_texture = soft
+	spray_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	spray_mat.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	spray_mat.billboard_keep_scale = true
+	spray_mat.vertex_color_use_as_albedo = true
+	spray_mat.roughness = 0.6
+	quad.material = spray_mat
+	spray.mesh = quad
 	spray.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
-	spray.emission_sphere_radius = 0.5
+	spray.emission_sphere_radius = 0.45
+	spray.angle_min = -180.0
+	spray.angle_max = 180.0
+	spray.angular_velocity_min = -360.0
+	spray.angular_velocity_max = 360.0
+	spray.scale_amount_min = 0.6
+	spray.scale_amount_max = 1.4
+	var fade := Gradient.new()
+	fade.set_color(0, Color(1, 1, 1, 1))
+	fade.set_color(1, Color(1, 1, 1, 0))
+	fade.add_point(0.7, Color(1, 1, 1, 0.85))
+	spray.color_ramp = fade
 	add_child(spray)
+
+	# Yıkayıcı sisi: büyüyerek kaybolan ince su buharı
+	mist = CPUParticles3D.new()
+	mist.emitting = false
+	mist.amount = 24
+	mist.lifetime = 1.3
+	var mq := QuadMesh.new()
+	mq.size = Vector2(0.5, 0.5)
+	var mist_mat := StandardMaterial3D.new()
+	mist_mat.albedo_texture = soft
+	mist_mat.albedo_color = Color(0.92, 0.96, 1.0, 0.16)
+	mist_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mist_mat.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	mist_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mist_mat.vertex_color_use_as_albedo = true
+	mq.material = mist_mat
+	mist.mesh = mq
+	mist.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+	mist.emission_sphere_radius = 0.35
+	mist.direction = Vector3.UP
+	mist.spread = 60.0
+	mist.initial_velocity_min = 0.2
+	mist.initial_velocity_max = 0.6
+	mist.gravity = Vector3(0, 0.15, 0)
+	var grow := Curve.new()
+	grow.add_point(Vector2(0, 0.4))
+	grow.add_point(Vector2(1, 1.6))
+	mist.scale_amount_curve = grow
+	mist.color_ramp = fade
+	add_child(mist)
 
 
 func _build_audio() -> void:
@@ -653,6 +715,8 @@ func _process(delta: float) -> void:
 	spray.global_position = aim + Vector3(0, 0.1, 0)
 	spray.emission_sphere_radius = r * (0.9 if current_tool == TOOL_VACUUM else 0.6)
 	spray.emitting = using
+	mist.global_position = spray.global_position
+	mist.emitting = using and current_tool == TOOL_WASHER
 	player.set_using(using)
 	_update_water_stream(using and current_tool == TOOL_WASHER, aim)
 	if using:
@@ -797,7 +861,9 @@ func _apply_tool_fx() -> void:
 	match current_tool:
 		TOOL_SCYTHE:
 			ring_mat.albedo_color = Color(0.75, 1.0, 0.45, 0.55)
-			spray_mat.albedo_color = Color(0.72, 0.66, 0.35)
+			_spray_look(Vector2(0.025, 0.13), [Color(0.8, 0.72, 0.42), Color(0.62, 0.6, 0.3), Color(0.55, 0.5, 0.28)], false)
+			spray.amount = 70
+			spray.lifetime = 0.8
 			spray.direction = Vector3.UP
 			spray.spread = 70.0
 			spray.initial_velocity_min = 1.5
@@ -808,7 +874,9 @@ func _apply_tool_fx() -> void:
 			spray_player.volume_db = -14.0
 		TOOL_RAKE:
 			ring_mat.albedo_color = Color(1.0, 0.85, 0.5, 0.55)
-			spray_mat.albedo_color = Color(0.72, 0.5, 0.26)
+			_spray_look(Vector2(0.07, 0.055), [Color(0.72, 0.45, 0.2), Color(0.55, 0.36, 0.18), Color(0.82, 0.6, 0.28)], false)
+			spray.amount = 40
+			spray.lifetime = 0.9
 			spray.direction = Vector3.UP
 			spray.spread = 80.0
 			spray.initial_velocity_min = 1.0
@@ -819,7 +887,9 @@ func _apply_tool_fx() -> void:
 			spray_player.volume_db = -15.0
 		TOOL_WASHER:
 			ring_mat.albedo_color = Color(0.65, 0.9, 1.0, 0.55)
-			spray_mat.albedo_color = Color(0.7, 0.9, 1.0)
+			_spray_look(Vector2(0.022, 0.09), [Color(0.85, 0.93, 1.0, 0.85), Color(0.95, 0.98, 1.0, 0.7)], true)
+			spray.amount = 120
+			spray.lifetime = 0.5
 			spray.direction = Vector3.UP
 			spray.spread = 55.0
 			spray.initial_velocity_min = 2.0
@@ -830,7 +900,9 @@ func _apply_tool_fx() -> void:
 			spray_player.volume_db = -18.0
 		TOOL_VACUUM:
 			ring_mat.albedo_color = Color(0.85, 0.65, 1.0, 0.55)
-			spray_mat.albedo_color = Color(0.92, 0.9, 0.96)
+			_spray_look(Vector2(0.03, 0.03), [Color(0.75, 0.7, 0.62, 0.6), Color(0.6, 0.56, 0.5, 0.5)], true)
+			spray.amount = 50
+			spray.lifetime = 0.45
 			spray.direction = Vector3.UP
 			spray.spread = 180.0
 			spray.initial_velocity_min = 0.0
@@ -843,12 +915,29 @@ func _apply_tool_fx() -> void:
 	player.set_tool(current_tool)
 
 
+## Parçacık görünümü: kart boyutu, rastgele renk tonları, gölgeli mi
+func _spray_look(size: Vector2, colors: Array, unshaded: bool) -> void:
+	(spray.mesh as QuadMesh).size = size
+	spray_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED if unshaded else BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	var offs := PackedFloat32Array()
+	var cols := PackedColorArray()
+	for i in colors.size():
+		offs.append(float(i) / maxf(1.0, colors.size() - 1))
+		cols.append(colors[i])
+	var g := Gradient.new()
+	g.offsets = offs
+	g.colors = cols
+	spray.color_initial_ramp = g
+
+
 # =====================================================================
 # TEMİZLİK
 # =====================================================================
 
 func _clean_layer(layer: String, p: Vector3, radius: float, amount: float) -> void:
 	var n: float = island.clean(p, radius, amount, layer)
+	if layer == "grass" and grass != null:
+		grass.refresh_area(p, radius + 0.4)
 	if n > 0.0:
 		cleaned_since_payout += n
 		_check_finds()
@@ -954,6 +1043,8 @@ func _update_progress() -> void:
 	var t := smoothstep(0.15, 0.95, local_clean)
 	sky_mat.set_shader_parameter("sunny", t)
 	ocean_mat.set_shader_parameter("gloom", 1.0 - t)
+	if grass != null:
+		grass.set_gloom(1.0 - t)
 	env.adjustment_saturation = lerpf(0.7, 1.08, t)
 	env.fog_density = lerpf(0.012, 0.002, t)
 	env.fog_light_color = Color(0.55, 0.58, 0.62).lerp(Color(0.75, 0.82, 0.9), t)
@@ -1386,6 +1477,8 @@ func _toggle_pause() -> void:
 		get_viewport().gui_get_focus_owner().release_focus()
 	_update_water_stream(false, Vector3.ZERO)
 	spray.emitting = false
+	if mist != null:
+		mist.emitting = false
 	if spray_player.playing:
 		spray_player.stop()
 	if paused:
@@ -1404,6 +1497,8 @@ func apply_settings(s: Dictionary) -> void:
 	sun.shadow_enabled = q >= 1 or not is_mobile
 	sun.directional_shadow_max_distance = [40.0, 80.0, 120.0, 200.0][q]
 	env.volumetric_fog_enabled = bool(s["fog"]) and not is_mobile
+	if grass != null:
+		grass.set_enabled(bool(s.get("grass3d", true)))
 	if env.volumetric_fog_enabled:
 		env.volumetric_fog_density = 0.012
 		env.volumetric_fog_anisotropy = 0.6

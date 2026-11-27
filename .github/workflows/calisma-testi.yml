@@ -35,6 +35,7 @@ jobs:
       - name: Ekran goruntuleri al
         run: |
           timeout 300 xvfb-run -a -s "-screen 0 1280x720x24" godot --path . --rendering-driver vulkan --windowed --resolution 1280x720 res://test/ui_onizleme.tscn -- --ekran=/tmp/ekran > shot.log 2>&1 || true
+          timeout 300 xvfb-run -a -s "-screen 0 1280x720x24" godot --path . --rendering-driver vulkan --windowed --resolution 1280x720 res://test/cimen_onizleme.tscn -- --ekran=/tmp/ekran >> shot.log 2>&1 || true
           grep -v "Parameter \"version\" is null" shot.log | tail -40
           ls -la /tmp/ekran || true
       - uses: actions/upload-artifact@v4

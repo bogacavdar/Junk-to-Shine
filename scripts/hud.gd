@@ -75,7 +75,7 @@ var settings_pages: Array[Control] = []
 var quality_buttons: Array[Button] = []
 var settings := {
 	"quality": 2, "draw": 300.0, "fov": 75.0, "sens": 5.0,
-	"fullscreen": true, "fog": false, "volume": 0.8,
+	"fullscreen": true, "fog": false, "volume": 0.8, "grass3d": true,
 }
 var value_labels := {}
 var first_pause_button: Button
@@ -94,6 +94,7 @@ func setup(g) -> void:
 	if game.is_mobile and not FileAccess.file_exists(SETTINGS_PATH):
 		settings["quality"] = 0
 		settings["draw"] = 180.0
+		settings["grass3d"] = false
 	_build_hud()
 	_build_shop()
 	_build_pause()
@@ -824,6 +825,7 @@ func _build_pause() -> void:
 	_slider_row(pv, "Çizim mesafesi", "draw", 80.0, 600.0, 10.0, " m")
 	_slider_row(pv, "Görüş açısı", "fov", 60.0, 100.0, 1.0, "°")
 	_toggle_row(pv, "Tam ekran", "fullscreen")
+	_toggle_row(pv, "Yakında 3D otlar", "grass3d")
 	_toggle_row(pv, "Işık hüzmeleri ve sis", "fog")
 
 	# Ses

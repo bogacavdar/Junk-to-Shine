@@ -182,6 +182,27 @@ func zone_unlocked(zn: int) -> bool:
 	return zn > 0 and (unlocked_mask >> zn) & 1 == 1
 
 
+## Hızlı zemin yüksekliği: parçanın köşe yüksekliklerinden çift doğrusal ara değer (gürültü hesaplamaz)
+func ground_height(x: float, z: float) -> float:
+	var key := chunk_of(x, z)
+	if not chunks.has(key):
+		return height_at(x, z)
+	var heights: PackedFloat32Array = chunks[key]["heights"]
+	var origin := chunk_origin(key)
+	var step := CHUNK_SIZE / float(VERTS - 1)
+	var fx := clampf((x - origin.x) / step, 0.0, VERTS - 1.001)
+	var fz := clampf((z - origin.z) / step, 0.0, VERTS - 1.001)
+	var i := int(fx)
+	var j := int(fz)
+	var tx := fx - i
+	var tz := fz - j
+	var h00: float = heights[j * VERTS + i]
+	var h10: float = heights[j * VERTS + i + 1]
+	var h01: float = heights[(j + 1) * VERTS + i]
+	var h11: float = heights[(j + 1) * VERTS + i + 1]
+	return lerpf(lerpf(h00, h10, tx), lerpf(h01, h11, tx), tz)
+
+
 ## Oyuncunun bulunduğu bölge (parça ızgarasından)
 func zone_at(x: float, z: float) -> int:
 	var key := chunk_of(x, z)
