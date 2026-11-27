@@ -417,9 +417,9 @@ func _build_hud() -> void:
 	msg_panel.visible = false
 	msg_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hud_root.add_child(msg_panel)
-	var mv := _vbox(6, mg[1])
-	msg_who = _label("", 12, GOLD, true, mv)
-	msg_text = _label("", 15, TEXT, false, mv)
+	var msgv := _vbox(6, mg[1])
+	msg_who = _label("", 12, GOLD, true, msgv)
+	msg_text = _label("", 15, TEXT, false, msgv)
 	msg_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	msg_text.custom_minimum_size = Vector2(404, 0)
 	msg_text.add_theme_constant_override("line_spacing", 3)
