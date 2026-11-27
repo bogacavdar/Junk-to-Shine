@@ -1417,18 +1417,18 @@ func apply_settings(s: Dictionary) -> void:
 func _screenshot_step() -> void:
 	shot_frame += 1
 	match shot_frame:
-		60:
+		5:
 			money = 12500.0
 			shown_money = money
 			bag = 4
-		150:
+		25:
 			_save_shot("1_oyun_ici.png")
 			_set_shop_open(true)
-		200:
+		40:
 			_save_shot("2_dukkan.png")
 			_set_shop_open(false)
 			_toggle_pause()
-		250:
+		55:
 			_save_shot("3_menu.png")
 			get_tree().quit()
 

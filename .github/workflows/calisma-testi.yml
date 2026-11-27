@@ -39,8 +39,8 @@ jobs:
           cat gl.log | head -300
       - name: Ekran goruntuleri al
         run: |
-          timeout 400 xvfb-run -a -s "-screen 0 1280x720x24" godot --path . --rendering-driver vulkan --windowed --resolution 1280x720 -- --ekran=/tmp/ekran > shot.log 2>&1 || true
-          grep -E "Ekran|ERROR" shot.log | head -40
+          timeout 1500 xvfb-run -a -s "-screen 0 1280x720x24" godot --path . --rendering-driver vulkan --windowed --resolution 1280x720 -- --ekran=/tmp/ekran > shot.log 2>&1 || true
+          grep -v "Parameter \"version\" is null" shot.log | tail -40
           ls -la /tmp/ekran || true
       - uses: actions/upload-artifact@v4
         with:
