@@ -29,14 +29,6 @@ jobs:
           DEBIAN_FRONTEND=noninteractive apt-get install -y -qq xvfb mesa-vulkan-drivers libvulkan1 libgl1-mesa-dri libglx-mesa0 libegl1 > /dev/null
       - name: Projeyi ice aktar
         run: godot --headless --import > import.log 2>&1 || true
-      - name: Forward+ (Vulkan, lavapipe) ile calistir
-        run: |
-          timeout 150 xvfb-run -a -s "-screen 0 1280x720x24" godot --path . --rendering-driver vulkan --quit-after 400 > vulkan.log 2>&1 || true
-          grep -v "Parameter \"version\" is null" vulkan.log | head -200
-      - name: Uyumluluk (OpenGL) ile calistir
-        run: |
-          timeout 150 xvfb-run -a -s "-screen 0 1280x720x24" godot --path . --rendering-method gl_compatibility --rendering-driver opengl3 --quit-after 400 > gl.log 2>&1 || true
-          cat gl.log | head -300
       - name: Ekran goruntuleri al
         run: |
           timeout 300 xvfb-run -a -s "-screen 0 1280x720x24" godot --path . --rendering-driver vulkan --windowed --resolution 1280x720 res://test/ui_onizleme.tscn -- --ekran=/tmp/ekran > shot.log 2>&1 || true
@@ -47,6 +39,14 @@ jobs:
           name: ekran-goruntuleri
           path: /tmp/ekran/*.png
           if-no-files-found: warn
+      - name: Forward+ (Vulkan, lavapipe) ile calistir
+        run: |
+          timeout 150 xvfb-run -a -s "-screen 0 1280x720x24" godot --path . --rendering-driver vulkan --quit-after 400 > vulkan.log 2>&1 || true
+          grep -v "Parameter \"version\" is null" vulkan.log | head -200
+      - name: Uyumluluk (OpenGL) ile calistir
+        run: |
+          timeout 150 xvfb-run -a -s "-screen 0 1280x720x24" godot --path . --rendering-method gl_compatibility --rendering-driver opengl3 --quit-after 400 > gl.log 2>&1 || true
+          cat gl.log | head -300
       - name: Hata ozeti
         run: |
           echo "==== VULKAN ===="; grep -n -A4 -E "SHADER ERROR|SCRIPT ERROR|ERROR:" vulkan.log | head -120 || true
