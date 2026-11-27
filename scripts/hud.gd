@@ -882,7 +882,7 @@ func _set_settings_tab(i: int) -> void:
 	settings_tab = i
 	for k in settings_pages.size():
 		settings_pages[k].visible = k == i
-		_style_button(settings_tab_buttons[k], "pill_on" if k == i else "pill", 17)
+		_style_button(settings_tab_buttons[k], "pill_on" if k == i else "pill", 14)
 		var st: StyleBoxFlat = settings_tab_buttons[k].get_theme_stylebox("normal")
 		st.content_margin_left = 14
 		st.content_margin_right = 14
