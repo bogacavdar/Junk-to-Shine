@@ -1036,7 +1036,7 @@ func _update_zones(delta: float) -> void:
 			var reward: float = float(island.zone_total[zn]) * MONEY_PER_PIXEL * IslandScript.ZONE_MULT[zn] * 0.25 * money_mult()
 			money += reward
 			income_total += reward
-			_show_banner("%s TERTEMİZ!  +%s" % [str(IslandScript.ZONE_NAMES[zn]).to_upper(), _fmt(reward)])
+			_show_banner("%s TERTEMİZ!  +%s" % [_tr_upper(str(IslandScript.ZONE_NAMES[zn])), _fmt(reward)])
 			for i in 8:
 				get_tree().create_timer(0.08 * i).timeout.connect(_play_blip.bind(coin_stream, 0.8 + i * 0.1, -4.0))
 
@@ -1893,3 +1893,8 @@ func _fmt_mult(v: float) -> String:
 	if v < 100.0:
 		return ("%.1f" % v).replace(".", ",")
 	return _fmt(v)
+
+
+## Türkçe büyük harf: i -> İ
+static func _tr_upper(t: String) -> String:
+	return t.replace("i", "İ").to_upper()

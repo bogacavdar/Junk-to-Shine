@@ -531,7 +531,7 @@ func _update_hud() -> void:
 	var zn: int = game.current_zone
 	var Isl = IslandScript
 	if zn > 0:
-		zone_name.text = str(Isl.ZONE_NAMES[zn]).to_upper()
+		zone_name.text = _tr_upper(str(Isl.ZONE_NAMES[zn]))
 		var f: float = game.island.zone_fraction(zn)
 		zone_bar.value = f
 		zone_pct.text = "%%%d" % int(f * 100.0)
@@ -606,7 +606,7 @@ func _update_message(delta: float) -> void:
 	if msg_queue.is_empty():
 		return
 	var m: Array = msg_queue.pop_front()
-	msg_who.text = str(m[0]).to_upper()
+	msg_who.text = _tr_upper(str(m[0]))
 	msg_text.text = m[1]
 	msg_panel.visible = true
 	msg_panel.reset_size()
@@ -1185,3 +1185,8 @@ func _save_settings() -> void:
 	for k in settings.keys():
 		cf.set_value("ayarlar", k, settings[k])
 	cf.save(SETTINGS_PATH)
+
+
+## Türkçe büyük harf: i -> İ
+static func _tr_upper(t: String) -> String:
+	return t.replace("i", "İ").to_upper()
