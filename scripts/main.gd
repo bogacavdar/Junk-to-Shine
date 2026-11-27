@@ -4,6 +4,7 @@ extends Node3D
 
 const PlayerScript := preload("res://scripts/player.gd")
 const IslandScript := preload("res://scripts/island.gd")
+const HudScript := preload("res://scripts/hud.gd")
 const PropsScript := preload("res://scripts/props.gd")
 const Models := preload("res://scripts/models.gd")
 
@@ -76,6 +77,12 @@ var bag_value := 0.0
 
 # --- Kir maskesi ---
 var island = null   # island.gd
+var hud = null      # hud.gd
+var income_total := 0.0   # toplam kazanç (arayüzdeki kazanç hızı için)
+var shot_dir := ""        # test: ekran görüntülerinin kaydedileceği klasör (komut satırından)
+var shot_frame := 0
+var tool_names: Array = TOOL_NAMES
+var upgrades: Array = UPGRADES
 var props = null    # props.gd
 var spawn_point := Vector3.ZERO
 var sky_mat: ShaderMaterial
@@ -113,8 +120,6 @@ var found_finds: Array[int] = []
 var world_seed := 0
 var master_volume := 0.8
 var paused := false
-var pause_panel: PanelContainer
-var fullscreen_button: Button
 var autosave_timer := 0.0
 
 # --- Yapraklar (binlerce, fizik yok) ---
@@ -131,24 +136,11 @@ var combo_timer := 0.0
 var tick_cooldown := 0.0
 
 # --- Arayüz ---
-var money_label: Label
-var bag_label: Label
-var pct_label: Label
-var count_label: Label
-var progress_bar: ProgressBar
-var shop_label: Label
-var info_label: Label
-var banner_label: Label
-var shop_panel: PanelContainer
-var crosshair: Label
-var prompt_label: Label
 var near_shop := false
 var shop_open := false
 var is_mobile := OS.has_feature("mobile")
 var touch = null   # touch_controls.gd (sadece telefonda)
 var water_stream: MeshInstance3D
-var shop_buttons: Array[Button] = []
-var shop_rows: Array[Label] = []
 
 
 func _ready() -> void:
@@ -174,15 +166,16 @@ func _ready() -> void:
 		touch = load("res://scripts/touch_controls.gd").new()
 		add_child(touch)
 		touch.player = player
-		info_label.text = "Sol: yürü   ·   Sağda kaydır: bak   ·   KULLAN basılı: temizle   ·   ALET: değiştir   ·   Konteyner yanında: DÜKKÂN"
-	_build_pause_menu()
 	if save.is_empty():
 		_spawn_all_trash()
 	else:
 		_apply_save(save)
-	_set_volume(master_volume)
+	hud.apply_settings()
 	_apply_tool_fx()
-	_update_hud()
+	for a: String in OS.get_cmdline_user_args():
+		if a.begins_with("--ekran="):
+			shot_dir = a.substr(8)
+			DirAccess.make_dir_recursive_absolute(shot_dir)
 
 
 # =====================================================================
@@ -599,109 +592,14 @@ func _build_audio() -> void:
 
 
 func _build_hud() -> void:
-	var layer := CanvasLayer.new()
-	add_child(layer)
-	money_label = _make_label(layer, Vector2(24, 14), 36, Color(1.0, 0.86, 0.3))
-	bag_label = _make_label(layer, Vector2(24, 62), 24, Color.WHITE)
+	hud = HudScript.new()
+	add_child(hud)
+	hud.setup(self)
 
-	progress_bar = ProgressBar.new()
-	progress_bar.position = Vector2(400, 22)
-	progress_bar.size = Vector2(440, 26)
-	progress_bar.max_value = 100.0
-	progress_bar.show_percentage = false
-	var fill := StyleBoxFlat.new()
-	fill.bg_color = Color(0.35, 0.8, 0.55)
-	fill.set_corner_radius_all(6)
-	var bg := StyleBoxFlat.new()
-	bg.bg_color = Color(0, 0, 0, 0.45)
-	bg.set_corner_radius_all(6)
-	progress_bar.add_theme_stylebox_override("fill", fill)
-	progress_bar.add_theme_stylebox_override("background", bg)
-	layer.add_child(progress_bar)
-	pct_label = _make_label(layer, Vector2(400, 50), 20, Color.WHITE)
-	pct_label.size = Vector2(440, 30)
-	pct_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	count_label = _make_label(layer, Vector2(400, 76), 17, Color(1, 1, 1, 0.85))
-	count_label.size = Vector2(440, 26)
-	count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-
-	shop_label = _make_label(layer, Vector2(990, 14), 20, Color.WHITE)
-	info_label = _make_label(layer, Vector2(24, 676), 18, Color(1, 1, 1, 0.85))
-	info_label.text = "WASD: yürü   ·   Fare: bak   ·   Shift: koş   ·   Sol tık basılı: aleti kullan   ·   1 tırpan · 2 tırmık · 3 yıkayıcı · 4 elk. süpürgesi (ya da tekerlek)   ·   Konteyner: sat, E: dükkân   ·   ESC: menü   ·   Kontrolcü destekli"
-
-	# Dükkân paneli: konteynerin yanına gelince açılır
-	shop_panel = PanelContainer.new()
-	shop_panel.position = Vector2(330, 40)
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.07, 0.11, 0.09, 0.9)
-	sb.set_corner_radius_all(10)
-	sb.set_content_margin_all(14)
-	shop_panel.add_theme_stylebox_override("panel", sb)
-	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", 8)
-	shop_panel.add_child(vb)
-	var title := Label.new()
-	title.text = "DÜKKÂN"
-	title.add_theme_font_size_override("font_size", 24)
-	title.add_theme_color_override("font_color", Color(0.6, 1.0, 0.75))
-	vb.add_child(title)
-	for i in UPGRADES.size():
-		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 12)
-		var l := Label.new()
-		l.custom_minimum_size = Vector2(440, 0)
-		l.add_theme_font_size_override("font_size", 17)
-		row.add_child(l)
-		shop_rows.append(l)
-		var b := Button.new()
-		b.custom_minimum_size = Vector2(150, 48)
-		b.add_theme_font_size_override("font_size", 18)
-		b.focus_mode = Control.FOCUS_ALL
-		b.pressed.connect(_on_shop_button.bind(i))
-		row.add_child(b)
-		vb.add_child(row)
-		shop_buttons.append(b)
-	# Son satır: sıradaki bölgeyi erken açma
-	var zrow := HBoxContainer.new()
-	zrow.add_theme_constant_override("separation", 12)
-	var zl := Label.new()
-	zl.custom_minimum_size = Vector2(440, 0)
-	zl.add_theme_font_size_override("font_size", 17)
-	zl.add_theme_color_override("font_color", Color(1.0, 0.8, 0.45))
-	zrow.add_child(zl)
-	shop_rows.append(zl)
-	var zb := Button.new()
-	zb.custom_minimum_size = Vector2(150, 48)
-	zb.add_theme_font_size_override("font_size", 18)
-	zb.focus_mode = Control.FOCUS_ALL
-	zb.pressed.connect(_on_shop_button.bind(UPGRADES.size()))
-	zrow.add_child(zb)
-	vb.add_child(zrow)
-	shop_buttons.append(zb)
-	shop_panel.visible = false
-	layer.add_child(shop_panel)
-
-	crosshair = _make_label(layer, Vector2(630, 342), 26, Color(1, 1, 1, 0.9))
-	crosshair.text = "+"
-	crosshair.size = Vector2(20, 36)
-	crosshair.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	prompt_label = _make_label(layer, Vector2(0, 430), 26, Color(0.7, 1.0, 0.8))
-	prompt_label.size = Vector2(1280, 40)
-	prompt_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	prompt_label.text = "DÜKKÂN butonuna bas" if is_mobile else "E  /  (A): Dükkânı aç"
-	prompt_label.visible = false
-
-	banner_label = _make_label(layer, Vector2(0, 250), 64, Color(0.6, 1.0, 0.75))
-	banner_label.size = Vector2(1280, 100)
-	banner_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	banner_label.visible = false
-
-
-# =====================================================================
-# OYUN DÖNGÜSÜ
-# =====================================================================
 
 func _process(delta: float) -> void:
+	if shot_dir != "":
+		_screenshot_step()
 	if paused:
 		return
 	autosave_timer += delta
@@ -728,11 +626,8 @@ func _process(delta: float) -> void:
 	if bag > 0 and to_container < 3.2:
 		_sell()
 	near_shop = to_container < 4.5
-	if shop_open and not near_shop:
+	if shop_open and not near_shop and shot_dir == "":
 		_set_shop_open(false)
-	shop_panel.visible = shop_open
-	prompt_label.visible = near_shop and not shop_open
-	crosshair.visible = not shop_open
 
 	if touch != null:
 		touch.set_interact_visible(near_shop or shop_open)
@@ -763,7 +658,9 @@ func _process(delta: float) -> void:
 	# Temizlikten gelen para
 	tick_cooldown -= delta
 	if cleaned_since_payout > 0.0:
-		money += cleaned_since_payout * MONEY_PER_PIXEL * money_mult()
+		var gain: float = cleaned_since_payout * MONEY_PER_PIXEL * money_mult()
+		money += gain
+		income_total += gain
 		cleaned_since_payout = 0.0
 		if tick_cooldown <= 0.0:
 			_play_blip(blip_stream, 1.4 + randf() * 0.3, -14.0)
@@ -975,6 +872,7 @@ func _collect_trash(body: RigidBody3D) -> void:
 func _sell() -> void:
 	var earned := bag_value
 	money += earned
+	income_total += earned
 	_float_text(container_pos + Vector3(0, 3.2, 0), "+%s SATILDI" % _fmt(earned), Color(0.5, 1.0, 0.6))
 	for i in mini(bag, 6):
 		get_tree().create_timer(0.06 * i).timeout.connect(_play_blip.bind(coin_stream, 1.0 + i * 0.08, -6.0))
@@ -1001,6 +899,7 @@ func _update_zones(delta: float) -> void:
 			props.restore(zn, false)
 			var reward: float = float(island.zone_total[zn]) * MONEY_PER_PIXEL * IslandScript.ZONE_MULT[zn] * 0.25 * money_mult()
 			money += reward
+			income_total += reward
 			_show_banner("%s TERTEMİZ!  +%s" % [str(IslandScript.ZONE_NAMES[zn]).to_upper(), _fmt(reward)])
 			for i in 8:
 				get_tree().create_timer(0.08 * i).timeout.connect(_play_blip.bind(coin_stream, 0.8 + i * 0.1, -4.0))
@@ -1018,13 +917,7 @@ func _unlock_zone(zn: int) -> void:
 
 
 func _show_banner(text: String) -> void:
-	banner_label.text = text
-	banner_label.visible = true
-	banner_label.modulate.a = 1.0
-	var tw := create_tween()
-	tw.tween_interval(3.0)
-	tw.tween_property(banner_label, "modulate:a", 0.0, 0.8)
-	tw.tween_callback(banner_label.hide)
+	hud.show_banner(text)
 
 
 ## Sıradaki kapalı bölge (yoksa -1)
@@ -1182,60 +1075,8 @@ func _try_pay(price: float) -> bool:
 	return true
 
 
-func _refresh_shop() -> void:
-	for i in UPGRADES.size():
-		var u: Dictionary = UPGRADES[i]
-		var lbl: Label = shop_rows[i]
-		var b: Button = shop_buttons[i]
-		lbl.text = "%s  Sv %d\n%s" % [u["name"], lvl(u["id"]), upgrade_effect(u["id"])]
-		if upgrade_maxed(i):
-			b.text = "MAKS"
-			b.disabled = true
-		else:
-			var price := upgrade_price(i)
-			b.text = _fmt(price)
-			b.disabled = money < price
-	var zl: Label = shop_rows[UPGRADES.size()]
-	var zb: Button = shop_buttons[UPGRADES.size()]
-	var zn := next_locked_zone()
-	if zn < 0:
-		zl.text = "Bütün bölgeler açık"
-		zb.text = "—"
-		zb.disabled = true
-	else:
-		zl.text = "Yeni bölge: %s  (kazanç ×%s)\nya da %s %%%d temizlenince kendiliğinden açılır" % [
-			IslandScript.ZONE_NAMES[zn], _fmt_mult(IslandScript.ZONE_MULT[zn]), IslandScript.ZONE_NAMES[zn - 1], int(IslandScript.ZONE_AUTO * 100.0)]
-		var zp: float = IslandScript.ZONE_PRICE[zn]
-		zb.text = _fmt(zp)
-		zb.disabled = money < zp
-
-
 func _update_hud() -> void:
-	money_label.text = "Para: %s" % _fmt(shown_money)
-	var cap := bag_capacity()
-	var bag_text := "Çanta: %d / %d   (değeri %s)" % [bag, cap, _fmt(bag_value)]
-	if bag >= cap:
-		bag_text += "   ·  DOLU! Konteynere götür"
-	bag_label.text = bag_text
-	progress_bar.value = clean_pct
-	var m2 := float(island.total_clean()) / 40.96
-	pct_label.text = "Ada: %%%.3f temiz   ·   %s m² temizlendi" % [clean_pct, _fmt(m2)]
-	var zn: int = current_zone
-	var zone_txt := "Deniz"
-	if zn > 0:
-		zone_txt = "%s  %%%d  (×%s)" % [IslandScript.ZONE_NAMES[zn], int(island.zone_fraction(zn) * 100.0), _fmt_mult(IslandScript.ZONE_MULT[zn])]
-	count_label.text = "Bölge: %s   ·   Kalan çöp: %d   ·   Buluntu: %d / %d" % [zone_txt, trash_bodies.size(), found_finds.size(), FINDS.size()]
-
-	var vac_text: String = ("Sv %d" % vacuum_level) if vacuum_level > 0 else "kilitli"
-	shop_label.text = "ALETLER\n%s [1] Tırpan  Sv %d\n%s [2] Tırmık  Sv %d\n%s [3] Yıkayıcı  Sv %d\n%s [4] Elk. süpürgesi  %s" % [
-		">" if current_tool == TOOL_SCYTHE else "  ", lvl("scythe"),
-		">" if current_tool == TOOL_RAKE else "  ", lvl("broom"),
-		">" if current_tool == TOOL_WASHER else "  ", lvl("pressure"),
-		">" if current_tool == TOOL_VACUUM else "  ", vac_text,
-	]
-
-	if shop_panel.visible:
-		_refresh_shop()
+	pass   # arayüz kendini hud.gd içinde günceller
 
 
 # =====================================================================
@@ -1399,6 +1240,7 @@ func _reveal_find(i: int) -> void:
 	var info: Array = FINDS[i]
 	var value: float = float(info[1]) * money_mult() * 5.0
 	money += value
+	income_total += value
 	var p: Vector3 = find_positions[i]
 	_float_text(p + Vector3(0, 1.4, 0), "Buldun: %s!  +%s" % [info[0], _fmt(value)], Color(1.0, 0.85, 0.3))
 	for k in 5:
@@ -1527,72 +1369,14 @@ func _notification(what: int) -> void:
 # DURAKLATMA MENÜSÜ
 # =====================================================================
 
-func _build_pause_menu() -> void:
-	var layer := CanvasLayer.new()
-	layer.layer = 10
-	add_child(layer)
-	pause_panel = PanelContainer.new()
-	pause_panel.position = Vector2(440, 170)
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0.06, 0.09, 0.08, 0.94)
-	sb.set_corner_radius_all(12)
-	sb.set_content_margin_all(22)
-	pause_panel.add_theme_stylebox_override("panel", sb)
-	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", 12)
-	pause_panel.add_child(vb)
-	var title := Label.new()
-	title.text = "JUNK TO SHINE"
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 30)
-	title.add_theme_color_override("font_color", Color(0.6, 1.0, 0.75))
-	vb.add_child(title)
-	_menu_button(vb, "Devam et", _toggle_pause)
-	fullscreen_button = _menu_button(vb, "", _toggle_fullscreen)
-	var vol_row := HBoxContainer.new()
-	var vol_label := Label.new()
-	vol_label.text = "Ses"
-	vol_label.custom_minimum_size = Vector2(60, 0)
-	vol_label.add_theme_font_size_override("font_size", 20)
-	vol_row.add_child(vol_label)
-	var slider := HSlider.new()
-	slider.min_value = 0.0
-	slider.max_value = 1.0
-	slider.step = 0.05
-	slider.value = master_volume
-	slider.custom_minimum_size = Vector2(300, 32)
-	slider.focus_mode = Control.FOCUS_ALL
-	slider.value_changed.connect(_set_volume)
-	vol_row.add_child(slider)
-	vb.add_child(vol_row)
-	_menu_button(vb, "Yeni oyun (kaydı sil)", _new_game)
-	_menu_button(vb, "Kaydet ve çık", _save_and_quit)
-	pause_panel.visible = false
-	layer.add_child(pause_panel)
-	_update_fullscreen_text()
-
-
-func _menu_button(parent: Node, text: String, cb: Callable) -> Button:
-	var b := Button.new()
-	b.text = text
-	b.custom_minimum_size = Vector2(380, 48)
-	b.add_theme_font_size_override("font_size", 20)
-	b.focus_mode = Control.FOCUS_ALL
-	b.pressed.connect(cb)
-	parent.add_child(b)
-	return b
-
-
 func _toggle_pause() -> void:
 	paused = not paused
-	pause_panel.visible = paused
+	hud.set_pause_visible(paused)
 	player.set_physics_process(not paused)
 	player.look_enabled = not paused
 	if not is_mobile:
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if paused else Input.MOUSE_MODE_CAPTURED
-	if paused:
-		_focus_first(pause_panel)
-	elif get_viewport().gui_get_focus_owner() != null:
+	if not paused and get_viewport().gui_get_focus_owner() != null:
 		get_viewport().gui_get_focus_owner().release_focus()
 	_update_water_stream(false, Vector3.ZERO)
 	spray.emitting = false
@@ -1602,17 +1386,61 @@ func _toggle_pause() -> void:
 		_save_game()
 
 
-func _toggle_fullscreen() -> void:
-	if DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN:
-		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
-	else:
-		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
-	_update_fullscreen_text()
+## Ayarları uygula (hud.gd ayarlar menüsünden gelir)
+func apply_settings(s: Dictionary) -> void:
+	var q: int = s["quality"]
+	var vp := get_viewport()
+	env.ssao_enabled = q >= 2
+	env.ssil_enabled = q >= 3
+	env.glow_enabled = q >= 1
+	vp.msaa_3d = [Viewport.MSAA_DISABLED, Viewport.MSAA_2X, Viewport.MSAA_2X, Viewport.MSAA_4X][q]
+	vp.scaling_3d_scale = 0.75 if q == 0 else 1.0
+	sun.shadow_enabled = q >= 1 or not is_mobile
+	sun.directional_shadow_max_distance = [40.0, 80.0, 120.0, 200.0][q]
+	env.volumetric_fog_enabled = bool(s["fog"]) and not is_mobile
+	if env.volumetric_fog_enabled:
+		env.volumetric_fog_density = 0.012
+		env.volumetric_fog_anisotropy = 0.6
+	if player != null:
+		player.camera.far = float(s["draw"]) + 200.0
+		player.camera.fov = float(s["fov"])
+		player.mouse_sensitivity = 0.0005 * float(s["sens"])
+	if not is_mobile:
+		var want_fs: bool = s["fullscreen"]
+		var is_fs := DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN
+		if want_fs != is_fs:
+			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN if want_fs else DisplayServer.WINDOW_MODE_WINDOWED)
+	_set_volume(float(s["volume"]))
 
 
-func _update_fullscreen_text() -> void:
-	var fs := DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN
-	fullscreen_button.text = "Pencere moduna geç" if fs else "Tam ekrana geç"
+## Test modu: sırayla oyun içi ekran, dükkân ve menü görüntüsünü kaydeder, sonra çıkar
+func _screenshot_step() -> void:
+	shot_frame += 1
+	match shot_frame:
+		60:
+			money = 12500.0
+			shown_money = money
+			bag = 4
+		150:
+			_save_shot("1_oyun_ici.png")
+			_set_shop_open(true)
+		200:
+			_save_shot("2_dukkan.png")
+			_set_shop_open(false)
+			_toggle_pause()
+		250:
+			_save_shot("3_menu.png")
+			get_tree().quit()
+
+
+func _save_shot(name: String) -> void:
+	var img := get_viewport().get_texture().get_image()
+	img.save_png(shot_dir.path_join(name))
+	print("Ekran görüntüsü kaydedildi: ", name)
+
+
+func select_tool_from_ui(i: int) -> void:
+	_select_tool(i)
 
 
 func _set_volume(v: float) -> void:
@@ -1637,14 +1465,12 @@ func _save_and_quit() -> void:
 
 func _set_shop_open(open: bool) -> void:
 	shop_open = open
-	shop_panel.visible = open
+	hud.set_shop_visible(open)
 	player.look_enabled = not open
 	player.set_physics_process(not open)
 	if not is_mobile:
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if open else Input.MOUSE_MODE_CAPTURED
-	if open:
-		shop_buttons[0].grab_focus()
-	elif get_viewport().gui_get_focus_owner() != null:
+	if not open and get_viewport().gui_get_focus_owner() != null:
 		get_viewport().gui_get_focus_owner().release_focus()
 	if open:
 		_update_water_stream(false, Vector3.ZERO)

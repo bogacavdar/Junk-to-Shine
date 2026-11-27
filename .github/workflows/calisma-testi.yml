@@ -15,6 +15,14 @@ jobs:
       image: barichello/godot-ci:4.3
     steps:
       - uses: actions/checkout@v4
+      - name: Yazi tiplerini indir (Space Grotesk, Inter - OFL)
+        run: |
+          mkdir -p assets/fonts
+          for f in "SpaceGrotesk-Variable.ttf|https://github.com/google/fonts/raw/main/ofl/spacegrotesk/SpaceGrotesk%5Bwght%5D.ttf" "Inter-Variable.ttf|https://github.com/google/fonts/raw/main/ofl/inter/Inter%5Bopsz,wght%5D.ttf"; do
+            n="${f%%|*}"; u="${f#*|}"
+            (curl -fsSL -o "assets/fonts/$n" "$u" || wget -q -O "assets/fonts/$n" "$u")
+          done
+          ls -la assets/fonts
       - name: Yazilim ekran karti kur
         run: |
           apt-get update -qq
@@ -24,11 +32,21 @@ jobs:
       - name: Forward+ (Vulkan, lavapipe) ile calistir
         run: |
           timeout 400 xvfb-run -a -s "-screen 0 1280x720x24" godot --path . --rendering-driver vulkan --quit-after 400 > vulkan.log 2>&1 || true
-          cat vulkan.log | head -300
+          grep -v "Parameter \"version\" is null" vulkan.log | head -200
       - name: Uyumluluk (OpenGL) ile calistir
         run: |
           timeout 400 xvfb-run -a -s "-screen 0 1280x720x24" godot --path . --rendering-method gl_compatibility --rendering-driver opengl3 --quit-after 400 > gl.log 2>&1 || true
           cat gl.log | head -300
+      - name: Ekran goruntuleri al
+        run: |
+          timeout 400 xvfb-run -a -s "-screen 0 1280x720x24" godot --path . --rendering-driver vulkan --windowed --resolution 1280x720 -- --ekran=/tmp/ekran > shot.log 2>&1 || true
+          grep -E "Ekran|ERROR" shot.log | head -40
+          ls -la /tmp/ekran || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ekran-goruntuleri
+          path: /tmp/ekran/*.png
+          if-no-files-found: warn
       - name: Hata ozeti
         run: |
           echo "==== VULKAN ===="; grep -n -A4 -E "SHADER ERROR|SCRIPT ERROR|ERROR:" vulkan.log | head -120 || true

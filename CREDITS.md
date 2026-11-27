@@ -4,3 +4,6 @@ https://polyhaven.com — modular_wooden_pier, wooden_crate_01, wooden_barrels_0
 
 ## Dokular ve gökyüzü (Poly Haven, CC0)
 sand_03, coast_sand_rocks_02, rocks_ground_02, quarry_cloudy, kloofendal_48d_partly_cloudy
+
+## Yazı tipleri (SIL Open Font License)
+Space Grotesk (Florian Karsten), Inter (Rasmus Andersson) — Google Fonts. Derleme sırasında indirilir.
