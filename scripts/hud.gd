@@ -231,7 +231,7 @@ func _button(text: String, kind: String, size: Vector2, font_size: int = 15, dis
 	var f := font_display if display else font_body
 	if f != null:
 		b.add_theme_font_override("font", f)
-	_style_button(b, kind, 999 if kind.begins_with("pill") else 12)
+	_style_button(b, kind, 17 if kind.begins_with("pill") else 12)
 	return b
 
 
@@ -609,7 +609,7 @@ func _set_shop_tab(i: int) -> void:
 	shop_tab = i
 	for k in shop_tab_buttons.size():
 		var on := k == i
-		_style_button(shop_tab_buttons[k], "pill_on" if on else "pill", 999)
+		_style_button(shop_tab_buttons[k], "pill_on" if on else "pill", 18)
 		var st: StyleBoxFlat = shop_tab_buttons[k].get_theme_stylebox("normal")
 		st.content_margin_left = 16
 		st.content_margin_right = 16
@@ -782,7 +782,7 @@ func _build_pause() -> void:
 	pause_sub = _label("Oyun duraklatıldı", 14, MUTED, false, tv)
 	var bv := _vbox(10, left)
 	first_pause_button = _pause_button(bv, "Devam et", "light", func() -> void: game._toggle_pause())
-	_pause_button(bv, "Ayarlar", "accent", func() -> void: _focus_settings())
+	_pause_button(bv, "Ayarlar", "outline", func() -> void: _focus_settings())
 	_pause_button(bv, "Kaydet ve çık", "outline", func() -> void: game._save_and_quit())
 	var ng := _pause_button(bv, "Yeni oyun başlat", "outline", func() -> void: _confirm_new_game())
 	ng.set_meta("confirm", false)
@@ -882,7 +882,7 @@ func _set_settings_tab(i: int) -> void:
 	settings_tab = i
 	for k in settings_pages.size():
 		settings_pages[k].visible = k == i
-		_style_button(settings_tab_buttons[k], "pill_on" if k == i else "pill", 999)
+		_style_button(settings_tab_buttons[k], "pill_on" if k == i else "pill", 17)
 		var st: StyleBoxFlat = settings_tab_buttons[k].get_theme_stylebox("normal")
 		st.content_margin_left = 14
 		st.content_margin_right = 14

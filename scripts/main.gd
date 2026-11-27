@@ -1012,17 +1012,17 @@ func upgrade_maxed(i: int) -> bool:
 func upgrade_effect(id: String) -> String:
 	match id:
 		"pressure":
-			return "Kir sökme ×%s" % _fmt_mult(power_mult(lvl(id)))
+			return "Çamur sökme ×%s" % _fmt_mult(power_mult(lvl(id)))
 		"nozzle":
-			return "Genişlik %.2f m" % (washer_radius() * 2.0)
+			return ("Genişlik %.2f m" % (washer_radius() * 2.0)).replace(".", ",")
 		"scythe":
 			return "Ot biçme ×%s" % _fmt_mult(power_mult(lvl(id)))
 		"scythe_w":
-			return "Genişlik %.2f m" % (0.7 * (1.0 + 0.06 * lvl(id)) * 2.0)
+			return ("Genişlik %.2f m" % (0.7 * (1.0 + 0.06 * lvl(id)) * 2.0)).replace(".", ",")
 		"broom":
 			return "Yaprak toplama ×%s" % _fmt_mult(power_mult(lvl(id)))
 		"broom_w":
-			return "Genişlik %.2f m" % (0.8 * (1.0 + 0.06 * lvl(id)) * 2.0)
+			return ("Genişlik %.2f m" % (0.8 * (1.0 + 0.06 * lvl(id)) * 2.0)).replace(".", ",")
 		"bag":
 			return "%d çöp" % bag_capacity()
 		"vacuum":
