@@ -3,8 +3,8 @@ render_mode cull_disabled, depth_draw_opaque;
 // Kuru, uzamış ot tutamları: köke doğru koyu, uca doğru açık; rüzgârda uçları sallanır.
 // INSTANCE_CUSTOM.rgb = tutam rengi, .a = rastgele faz
 
-uniform vec3 root_color : source_color = vec3(0.26, 0.22, 0.12);
-uniform vec3 tip_color : source_color = vec3(0.78, 0.68, 0.42);
+uniform vec3 root_color : source_color = vec3(0.2, 0.19, 0.1);
+uniform vec3 tip_color : source_color = vec3(0.6, 0.53, 0.32);
 uniform float wind_strength = 0.14;
 uniform float wind_speed = 1.6;
 uniform float gloom = 0.0;   // kasvetli havada renkler solar
@@ -33,7 +33,7 @@ void fragment() {
 	ALBEDO = c;
 	ROUGHNESS = 0.9;
 	SPECULAR = 0.2;
-	BACKLIGHT = c * 0.6;
+	BACKLIGHT = c * 0.45;
 	AO = mix(0.45, 1.0, tip);
 	AO_LIGHT_AFFECT = 0.6;
 }

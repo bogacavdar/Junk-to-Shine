@@ -3,8 +3,8 @@ extends Node3D
 ## Sadece "grass" katmanı biçilmemiş yerlerde çıkar; tırpanla biçilen yerde anında kaybolur.
 ## Dünyaya sabit bir ızgara kullanır: oyuncu birkaç metre yürüyünce ızgara yeniden kurulur.
 
-const SPACING := 0.42          # tutamlar arası mesafe (m)
-const RADIUS := 20.0           # oyuncu çevresinde otun çizildiği yarıçap (m)
+const SPACING := 0.33          # tutamlar arası mesafe (m)
+const RADIUS := 16.0           # oyuncu çevresinde otun çizildiği yarıçap (m)
 const REBUILD_DIST := 4.0      # bu kadar yürüyünce ızgara yeniden kurulur
 const SHOW_THRESHOLD := 70     # ot maskesi bu değerin üstündeyse tutam görünür
 
@@ -69,9 +69,8 @@ func _process(_delta: float) -> void:
 
 
 func _hash(x: int, z: int) -> float:
-	var h := (x * 374761393 + z * 668265263) & 0x7fffffff
-	h = (h ^ (h >> 13)) * 1274126177
-	return float((h ^ (h >> 16)) & 0xffff) / 65535.0
+	var v := sin(float(x) * 127.1 + float(z) * 311.7) * 43758.5453
+	return v - floor(v)
 
 
 func _rebuild(center: Vector3) -> void:
@@ -109,7 +108,7 @@ func _set_instance(gx: int, gz: int) -> void:
 		mm.set_instance_transform(idx, Transform3D(Basis().scaled(Vector3(0.0001, 0.0001, 0.0001)), Vector3(x, -50, z)))
 		return
 	var dens := clampf(float(v - SHOW_THRESHOLD) / 120.0, 0.0, 1.0)
-	var hgt := lerpf(0.35, 0.85, dens) * lerpf(0.75, 1.25, r3)
+	var hgt := lerpf(0.3, 0.8, dens) * lerpf(0.6, 1.35, r3 * r3)
 	# Kenarlara doğru (uzakta) biraz kısalsın: geçiş yumuşak görünsün
 	hgt *= 1.0 - smoothstep(RADIUS * 0.75, RADIUS, d) * 0.6
 	var wdt := lerpf(0.8, 1.2, r1)
@@ -117,7 +116,8 @@ func _set_instance(gx: int, gz: int) -> void:
 	var y: float = island.ground_height(x, z) - 0.03
 	mm.set_instance_transform(idx, Transform3D(b, Vector3(x, y, z)))
 	# Renk: saman sarısı ile soluk yeşil-kahve arası
-	var tint := Color(1.0, 1.0, 1.0).lerp(Color(0.85, 0.95, 0.75), r3).lerp(Color(1.08, 0.95, 0.8), r1 * 0.5)
+	var tint := Color(1.0, 1.0, 1.0).lerp(Color(0.8, 0.95, 0.7), r3 * 0.8).lerp(Color(1.1, 0.95, 0.78), r1 * 0.5)
+	tint = tint * lerpf(0.75, 1.1, r2)
 	tint.a = r2
 	mm.set_instance_custom_data(idx, tint)
 
@@ -128,16 +128,16 @@ func _tuft_mesh() -> ArrayMesh:
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 1234
-	var blades := 7
+	var blades := 12
 	var segs := 3
 	for b in blades:
 		var ang := TAU * b / blades + rng.randf_range(-0.4, 0.4)
 		var dir := Vector3(cos(ang), 0, sin(ang))
 		var side := Vector3(-dir.z, 0, dir.x)
-		var lean := rng.randf_range(0.15, 0.45)
-		var h := rng.randf_range(0.7, 1.0)
-		var w := rng.randf_range(0.018, 0.03)
-		var base := dir * rng.randf_range(0.0, 0.05)
+		var lean := rng.randf_range(0.08, 0.55)
+		var h := rng.randf_range(0.45, 1.0)
+		var w := rng.randf_range(0.007, 0.014)
+		var base := dir * rng.randf_range(0.0, 0.09)
 		var prev_l := Vector3.ZERO
 		var prev_r := Vector3.ZERO
 		for s in segs + 1:
