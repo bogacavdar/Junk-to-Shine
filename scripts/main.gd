@@ -176,6 +176,12 @@ func _ready() -> void:
 		if a.begins_with("--ekran="):
 			shot_dir = a.substr(8)
 			DirAccess.make_dir_recursive_absolute(shot_dir)
+			# Ekran kartı olmayan test makinesinde hızlı çizim için en düşük ayar
+			hud.settings["quality"] = 0
+			hud.settings["draw"] = 80.0
+			hud.settings["fog"] = false
+			hud.apply_settings()
+			sun.shadow_enabled = false
 
 
 # =====================================================================
@@ -1416,6 +1422,7 @@ func apply_settings(s: Dictionary) -> void:
 ## Test modu: sırayla oyun içi ekran, dükkân ve menü görüntüsünü kaydeder, sonra çıkar
 func _screenshot_step() -> void:
 	shot_frame += 1
+	print("kare ", shot_frame, " @ ", Time.get_ticks_msec(), " ms")
 	match shot_frame:
 		5:
 			money = 12500.0
