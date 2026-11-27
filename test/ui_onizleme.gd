@@ -25,8 +25,9 @@ func _ready() -> void:
 	bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	bg.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 	bg_layer.add_child(bg)
-	player = Node3D.new()
+	player = PlayerScript.new()
 	add_child(player)
+	player.set_physics_process(false)
 	env = Environment.new()
 	sun = DirectionalLight3D.new()
 	island = FakeIsland.new()
