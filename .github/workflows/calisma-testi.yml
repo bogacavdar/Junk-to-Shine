@@ -8,6 +8,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   calistir:
     runs-on: ubuntu-latest
@@ -39,6 +42,16 @@ jobs:
           name: ekran-goruntuleri
           path: /tmp/ekran/*.png
           if-no-files-found: warn
+      - name: Ekran goruntulerini ekran-goruntuleri dalina gonder
+        if: always()
+        run: |
+          [ -d /tmp/ekran ] || exit 0
+          rm -rf /tmp/egit && mkdir /tmp/egit && cp /tmp/ekran/*.png /tmp/egit/ 2>/dev/null || exit 0
+          cd /tmp/egit
+          git init -q -b ekran
+          git config user.name "ci" && git config user.email "ci@users.noreply.github.com"
+          git add -A && git commit -qm "Ekran goruntuleri ${GITHUB_SHA}"
+          git push -qf "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" ekran:ekran-goruntuleri
       - name: Forward+ (Vulkan, lavapipe) ile calistir
         run: |
           timeout 150 xvfb-run -a -s "-screen 0 1280x720x24" godot --path . --rendering-driver vulkan --quit-after 400 > vulkan.log 2>&1 || true
