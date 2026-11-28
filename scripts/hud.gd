@@ -94,6 +94,7 @@ var quality_buttons: Array[Button] = []
 var settings := {
 	"quality": 2, "draw": 300.0, "fov": 75.0, "sens": 5.0,
 	"fullscreen": true, "fog": false, "volume": 0.8, "grass3d": true,
+	"music": 0.6, "sfx": 0.9, "ambience": 0.8,
 }
 var value_labels := {}
 var first_pause_button: Button
@@ -961,6 +962,9 @@ func _build_pause() -> void:
 	var av := _vbox(18, sv)
 	settings_pages.append(av)
 	_slider_row(av, "Genel ses", "volume", 0.0, 1.0, 0.05, "%")
+	_slider_row(av, "Müzik", "music", 0.0, 1.0, 0.05, "%")
+	_slider_row(av, "Efekt sesleri", "sfx", 0.0, 1.0, 0.05, "%")
+	_slider_row(av, "Doğa sesleri", "ambience", 0.0, 1.0, 0.05, "%")
 
 	# Kontroller
 	var kv := _vbox(14, sv)

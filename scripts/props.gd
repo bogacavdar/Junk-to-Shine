@@ -20,6 +20,7 @@ var ferry_t := -1.0          # <0: bekliyor; 0..1 yanaşıyor
 var ferry_from := Vector3.ZERO
 var ferry_to := Vector3.ZERO
 var time := 0.0
+var _last_rim: Array = []
 signal ferry_arrived
 
 const Isl := preload("res://scripts/island.gd")
@@ -580,7 +581,25 @@ func _hull_mesh(length: float, beam: float, depth: float, flat_stern := 0.85) ->
 		st.set_uv(Vector2(0.0, 0.0)); st.add_vertex(r0[j + 1])
 		st.set_uv(Vector2(1.0, 0.0)); st.add_vertex(r0[j])
 	st.generate_normals()
+	_last_rim = [rows.map(func(r: Array) -> Vector3: return r[0]), rows.map(func(r: Array) -> Vector3: return r[nv])]
 	return st.commit()
+
+
+## Küpeşte: gövdenin üst kenarı boyunca ince şeritler (iki yan)
+func _rim(parent: Node3D, mat: Material, thick: float, height: float) -> void:
+	for side: Array in _last_rim:
+		for i in side.size() - 1:
+			var a: Vector3 = side[i]
+			var b: Vector3 = side[i + 1]
+			var mid := (a + b) * 0.5
+			var seg := b - a
+			var mi := MeshInstance3D.new()
+			var bm := BoxMesh.new()
+			bm.size = Vector3(thick, height, seg.length() + 0.02)
+			mi.mesh = bm
+			mi.material_override = mat
+			mi.transform = Transform3D(Basis.looking_at(seg.normalized(), Vector3.UP), mid + Vector3(0, -height * 0.4, 0))
+			parent.add_child(mi)
 
 
 func _paint(col: Color, rough := 0.55) -> StandardMaterial3D:
@@ -607,14 +626,18 @@ func _boat(parent: Node3D, length: float, col: Color) -> Node3D:
 		var u := clampf(z / length + 0.5, 0.0, 1.0)
 		var w := length * 0.36 * sqrt(maxf(0.0, 1.0 - pow(u, 3.0))) * (0.85 + 0.15 * sin(PI * u))
 		_box(root, Vector3(0, d * 0.72, z), Vector3(w * 0.92, 0.05, 0.28), wood)
-	# Kenar şeridi
-	var stripe := _paint(Color(0.12, 0.14, 0.16))
-	var sm := MeshInstance3D.new()
-	sm.mesh = _hull_mesh(length * 1.005, length * 0.365, length * 0.17 * 1.02)
-	sm.material_override = stripe
-	sm.scale = Vector3(1, 0.06, 1)
-	sm.position.y = d * 0.97
-	root.add_child(sm)
+	# Küpeşte (gövde ağı en son üretilen olmalı: _last_rim)
+	_rim(root, wood, 0.07, 0.09)
+	# İç taban
+	_box(root, Vector3(0, d * 0.28, -length * 0.08), Vector3(length * 0.36 * 0.55, 0.04, length * 0.6), wood)
+	# Dıştan takma motor (kıçta)
+	var dark := _paint(Color(0.1, 0.1, 0.11), 0.4)
+	var motor := Node3D.new()
+	motor.position = Vector3(0, d * 1.0, -length * 0.5 - 0.12)
+	root.add_child(motor)
+	_box(motor, Vector3(0, 0.2, 0), Vector3(0.32, 0.38, 0.42), dark)
+	_box(motor, Vector3(0, -0.25, 0.02), Vector3(0.08, 0.6, 0.12), dark)
+	_box(motor, Vector3(0, 0.05, 0.3), Vector3(0.04, 0.04, 0.4), _paint(Color(0.6, 0.6, 0.62), 0.3))
 	_register(3, {"kind": "color", "mat": paint, "color": col})
 	paint.albedo_color = col.lerp(Color(0.33, 0.30, 0.25), 0.75)
 	return root
@@ -1011,12 +1034,10 @@ func _build_ferry() -> void:
 	hull.material_override = _paint(Color(0.92, 0.93, 0.92), 0.4)
 	hull.position.y = -1.6
 	ferry.add_child(hull)
-	var band := MeshInstance3D.new()
-	band.mesh = _hull_mesh(26.1, 8.05, 3.2, 0.95)
-	band.material_override = _paint(Color(0.1, 0.25, 0.5), 0.4)
-	band.scale = Vector3(1, 0.12, 1)
-	band.position.y = -1.6 + 2.2
+	var band := Node3D.new()
+	band.position.y = -1.6
 	ferry.add_child(band)
+	_rim(band, _paint(Color(0.1, 0.25, 0.5), 0.4), 0.12, 0.7)
 	var deck := _paint(Color(0.55, 0.5, 0.45), 0.8)
 	_box(ferry, Vector3(0, 1.75, -1.5), Vector3(7.0, 0.15, 20.0), deck)
 	var cabin := _paint(Color(0.95, 0.95, 0.94), 0.35)

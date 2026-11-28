@@ -28,6 +28,17 @@ func _ready() -> void:
 			shot_dir = a.substr(8)
 			DirAccess.make_dir_recursive_absolute(shot_dir)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	# Menü müziği: oyunun müziğinin iki katmanı birlikte
+	for nm in ["muzik_taban", "muzik_melodi"]:
+		var path := "res://assets/audio/%s.ogg" % nm
+		if ResourceLoader.exists(path):
+			var st: AudioStream = load(path)
+			st.loop = true
+			var ap := AudioStreamPlayer.new()
+			ap.stream = st
+			ap.volume_db = -10.0 if nm == "muzik_taban" else -14.0
+			add_child(ap)
+			ap.play()
 
 
 func _build_backdrop() -> void:

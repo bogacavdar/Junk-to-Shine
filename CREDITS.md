@@ -7,3 +7,7 @@ sand_03, coast_sand_rocks_02, rocks_ground_02, quarry_cloudy, kloofendal_48d_par
 
 ## Yazı tipleri (SIL Open Font License)
 Space Grotesk (Florian Karsten), Inter (Rasmus Andersson) — Google Fonts. Derleme sırasında indirilir.
+
+## Sesler ve müzik
+Tüm ses efektleri, ortam sesleri ve müzik bu proje için koddan üretilmiştir (`tools/ses_uret.py`, numpy/scipy).
+Dış kaynak veya kayıt kullanılmamıştır; telif ve lisans kısıtı yoktur.

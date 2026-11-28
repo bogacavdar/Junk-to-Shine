@@ -32,6 +32,17 @@ func _spawn() -> void:
 	var x := c.x + cos(a) * 3.0
 	var z := c.z + 3.0 + sin(a) * 3.0
 	n.position = Vector3(x, game.island.ground_height(x, z), z)
+	var snd: AudioStream = game.sfx.get("robot")
+	if snd != null:
+		var ap := AudioStreamPlayer3D.new()
+		ap.stream = snd
+		ap.bus = "Efekt"
+		ap.volume_db = -14.0
+		ap.unit_size = 2.5
+		ap.max_distance = 28.0
+		ap.pitch_scale = randf_range(0.92, 1.08)
+		ap.autoplay = true
+		n.add_child(ap)
 	bots.append({"node": n, "target": n.position, "timer": randf() * TICK, "brush": n.get_node("Firca"), "stuck": 0.0, "led": n.get_node("Led")})
 
 

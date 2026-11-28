@@ -165,7 +165,14 @@ var coin_stream: AudioStreamWAV
 var blip_players: Array[AudioStreamPlayer] = []
 var blip_index := 0
 var spray_player: AudioStreamPlayer
-var tool_streams: Array[AudioStreamWAV] = []
+var tool_streams: Array = []   # alet başına döngü sesi (null: tırpan gibi tek tek savrulan)
+var sfx := {}                  # ad -> AudioStream (assets/audio, koddan üretildi: tools/ses_uret.py)
+var amb_gloomy: AudioStreamPlayer
+var amb_sunny: AudioStreamPlayer
+var music_base: AudioStreamPlayer
+var music_melody: AudioStreamPlayer
+var swish_timer := 0.0
+var mood := 0.0                # 0 kasvetli .. 1 güneşli (ses karışımı için)
 var combo := 0
 var combo_timer := 0.0
 var tick_cooldown := 0.0
@@ -693,13 +700,77 @@ func _build_audio() -> void:
 		ap.volume_db = -8.0
 		add_child(ap)
 		blip_players.append(ap)
-	# Her aletin kendi döngü sesi: süpürge hışırtısı, su, motor uğultusu
-	tool_streams.append(_make_noise_loop(1.0, 0.12, 0.0))
-	tool_streams.append(_make_noise_loop(1.0, 0.08, 0.0))
-	tool_streams.append(_make_noise_loop(1.0, 0.35, 0.0))
-	tool_streams.append(_make_noise_loop(1.0, 0.15, 110.0))
+	# Ses kanalları: Müzik, Ortam, Efekt (hepsi ana kanala gider)
+	for bus_name in ["Muzik", "Ortam", "Efekt"]:
+		if AudioServer.get_bus_index(bus_name) < 0:
+			AudioServer.add_bus()
+			var bi := AudioServer.bus_count - 1
+			AudioServer.set_bus_name(bi, bus_name)
+			AudioServer.set_bus_send(bi, "Master")
+	for nm in ["tirpan", "tirmik", "yikayici", "motor", "supurge", "robot", "telsiz", "buluntu", "feribot",
+			"bolge_tamam", "para", "topla", "ortam_kasvetli", "ortam_gunesli", "muzik_taban", "muzik_melodi"]:
+		var path := "res://assets/audio/%s.ogg" % nm
+		sfx[nm] = load(path) if ResourceLoader.exists(path) else null
+	for nm in ["tirmik", "yikayici", "motor", "supurge", "robot", "ortam_kasvetli", "ortam_gunesli", "muzik_taban", "muzik_melodi"]:
+		if sfx[nm] != null:
+			sfx[nm].loop = true
+	for ap: AudioStreamPlayer in blip_players:
+		ap.bus = "Efekt"
 	spray_player = AudioStreamPlayer.new()
+	spray_player.bus = "Efekt"
 	add_child(spray_player)
+	_refresh_tool_streams()
+	# Ortam: kasvetli ve güneşli katmanlar birlikte çalar, ada temizlendikçe karışım değişir
+	amb_gloomy = _loop_player(sfx["ortam_kasvetli"], "Ortam", -6.0)
+	amb_sunny = _loop_player(sfx["ortam_gunesli"], "Ortam", -60.0)
+	# Müzik: taban hep çalar; melodi katmanı ada güneşlendikçe yükselir
+	music_base = _loop_player(sfx["muzik_taban"], "Muzik", -10.0)
+	music_melody = _loop_player(sfx["muzik_melodi"], "Muzik", -30.0)
+
+
+func _loop_player(stream: AudioStream, bus: String, vol: float) -> AudioStreamPlayer:
+	var ap := AudioStreamPlayer.new()
+	ap.stream = stream
+	ap.bus = bus
+	ap.volume_db = vol
+	add_child(ap)
+	if stream != null:
+		ap.play()
+	return ap
+
+
+## Aletin döngü sesi kademeye göre: motorlu aletler motor sesiyle çalışır
+func _refresh_tool_streams() -> void:
+	if sfx.is_empty():
+		return
+	tool_streams = [
+		sfx["motor"] if tier(0) >= 1 else null,
+		sfx["motor"] if tier(1) >= 1 else sfx["tirmik"],
+		sfx["yikayici"],
+		sfx["supurge"],
+	]
+	if spray_player != null:
+		var was := spray_player.playing
+		spray_player.stream = tool_streams[current_tool]
+		spray_player.pitch_scale = 1.0 + 0.12 * tier(current_tool) if current_tool <= TOOL_WASHER else 1.0
+		if was and spray_player.stream != null:
+			spray_player.play()
+
+
+func play_sfx(nm: String, vol := 0.0, pitch := 1.0) -> void:
+	var st: AudioStream = sfx.get(nm)
+	if st != null:
+		_play_blip(st, pitch, vol)
+
+
+## Ortam ve müzik karışımı: t = 0 kasvetli, 1 güneşli
+func _update_sound_mood(t: float) -> void:
+	mood = t
+	if amb_gloomy == null:
+		return
+	amb_gloomy.volume_db = linear_to_db(maxf(0.0001, (1.0 - t) * 0.6 + 0.05))
+	amb_sunny.volume_db = linear_to_db(maxf(0.0001, t * 0.65))
+	music_melody.volume_db = linear_to_db(maxf(0.0001, 0.12 + 0.6 * t))
 
 
 func _build_hud() -> void:
@@ -764,11 +835,16 @@ func _process(delta: float) -> void:
 	mist.emitting = using and current_tool == TOOL_WASHER
 	player.set_using(using)
 	_update_water_stream(using and current_tool == TOOL_WASHER, aim)
-	if using:
+	if using and spray_player.stream != null:
 		if not spray_player.playing:
 			spray_player.play()
 	elif spray_player.playing:
 		spray_player.stop()
+	# Elle tırpan: her savuruşta "hışş"
+	swish_timer -= delta
+	if using and current_tool == TOOL_SCYTHE and tier(0) == 0 and swish_timer <= 0.0:
+		swish_timer = randf_range(0.42, 0.55)
+		play_sfx("tirpan", -6.0, randf_range(0.9, 1.12))
 
 	# Temizlikten gelen para
 	tick_cooldown -= delta
@@ -956,7 +1032,8 @@ func _apply_tool_fx() -> void:
 			spray.radial_accel_min = -16.0
 			spray.radial_accel_max = -10.0
 			spray_player.volume_db = -16.0
-	spray_player.stream = tool_streams[current_tool]
+	spray_player.stream = tool_streams[current_tool] if current_tool < tool_streams.size() else null
+	spray_player.pitch_scale = 1.0 + 0.12 * tier(current_tool) if current_tool <= TOOL_WASHER else 1.0
 	player.set_tool(current_tool)
 
 
@@ -1008,7 +1085,7 @@ func _collect_trash(body: RigidBody3D) -> void:
 	tw.chain().tween_callback(body.queue_free)
 	combo += 1
 	combo_timer = 1.0
-	_play_blip(blip_stream, 1.0 + minf(combo, 12) * 0.06 + randf() * 0.05, -6.0)
+	play_sfx("topla", -8.0, 1.0 + minf(combo, 12) * 0.06 + randf() * 0.05)
 	_float_text(body.global_position + Vector3(0, 1.0, 0), "+" + _fmt(value), Color(1.0, 0.85, 0.3))
 
 
@@ -1025,6 +1102,7 @@ func _auto_sell() -> void:
 
 func _sell() -> void:
 	stat_sells += 1
+	play_sfx("para", -4.0)
 	var earned := bag_value
 	money += earned
 	income_total += earned
@@ -1057,11 +1135,13 @@ func _update_zones(delta: float) -> void:
 			money += reward
 			income_total += reward
 			_show_banner("%s TERTEMİZ!  +%s" % [_tr_upper(str(IslandScript.ZONE_NAMES[zn])), _fmt(reward)])
+			play_sfx("bolge_tamam", -2.0)
 			for i in 8:
 				get_tree().create_timer(0.08 * i).timeout.connect(_play_blip.bind(coin_stream, 0.8 + i * 0.1, -4.0))
 
 
 func _on_ferry_arrived() -> void:
+	play_sfx("feribot", 0.0)
 	_show_banner("İLK FERİBOT YANAŞTI!")
 	_message("Selin · iskele", "Feribottan iniyorum! Adayı tanıyamadım… Hoş geldin demek bana düşerdi ama sen bizi karşıladın. Fenerin ışığını karşı kıyıdan herkes gördü.")
 
@@ -1080,6 +1160,8 @@ func _message(who: String, text: String) -> void:
 	if journal.size() > 80:
 		journal.pop_front()
 	hud.show_message(who, text)
+	if who.contains("telsiz"):
+		play_sfx("telsiz", -8.0)
 
 
 func _update_quest() -> void:
@@ -1167,6 +1249,7 @@ func _update_progress() -> void:
 	env.fog_light_color = Color(0.55, 0.58, 0.62).lerp(Color(0.75, 0.82, 0.9), t)
 	sun.light_energy = lerpf(0.6, 1.25, t)
 	sun.light_color = Color(0.85, 0.88, 0.95).lerp(Color(1.0, 0.93, 0.82), t)
+	_update_sound_mood(t)
 
 
 # =====================================================================
@@ -1372,6 +1455,7 @@ func upgrade_effect(id: String) -> String:
 func _apply_levels() -> void:
 	vacuum_level = lvl("vacuum")
 	_tier_names()
+	_refresh_tool_streams()
 	if player != null:
 		player.set_tier(tier(0), tier(1), tier(2))
 	if robots != null:
@@ -1470,7 +1554,7 @@ func _float_text(pos: Vector3, text: String, color: Color) -> void:
 	tw.chain().tween_callback(l.queue_free)
 
 
-func _play_blip(stream: AudioStreamWAV, pitch: float, volume: float) -> void:
+func _play_blip(stream: AudioStream, pitch: float, volume: float) -> void:
 	var ap: AudioStreamPlayer = blip_players[blip_index]
 	blip_index = (blip_index + 1) % blip_players.size()
 	ap.stream = stream
@@ -1615,6 +1699,7 @@ func _reveal_find(i: int) -> void:
 	var p: Vector3 = find_positions[i]
 	_float_text(p + Vector3(0, 1.4, 0), "Buldun: %s!  +%s" % [info[0], _fmt(value)], Color(1.0, 0.85, 0.3))
 	_message("Buluntu · %s" % info[0], Gorev.FIND_NOTES[i] if i < Gorev.FIND_NOTES.size() else str(info[0]))
+	play_sfx("buluntu", -3.0)
 	for k in 5:
 		get_tree().create_timer(0.07 * k).timeout.connect(_play_blip.bind(coin_stream, 1.0 + k * 0.12, -4.0))
 	# Altın parıltı patlaması
@@ -1813,6 +1898,9 @@ func apply_settings(s: Dictionary) -> void:
 		if want_fs != is_fs:
 			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN if want_fs else DisplayServer.WINDOW_MODE_WINDOWED)
 	_set_volume(float(s["volume"]))
+	_set_bus_volume("Muzik", float(s.get("music", 0.6)))
+	_set_bus_volume("Efekt", float(s.get("sfx", 0.9)))
+	_set_bus_volume("Ortam", float(s.get("ambience", 0.8)))
 
 
 ## Test modu: sırayla oyun içi ekran, dükkân ve menü görüntüsünü kaydeder, sonra çıkar
@@ -1849,6 +1937,12 @@ func select_tool_from_ui(i: int) -> void:
 func _set_volume(v: float) -> void:
 	master_volume = v
 	AudioServer.set_bus_volume_db(0, linear_to_db(maxf(v, 0.0001)))
+
+
+func _set_bus_volume(bus_name: String, v: float) -> void:
+	var bi := AudioServer.get_bus_index(bus_name)
+	if bi >= 0:
+		AudioServer.set_bus_volume_db(bi, linear_to_db(maxf(v, 0.0001)))
 
 
 func _new_game() -> void:
