@@ -976,8 +976,8 @@ func _build_lighthouse() -> void:
 		var beam := MeshInstance3D.new()
 		var cm := CylinderMesh.new()
 		cm.top_radius = 0.6
-		cm.bottom_radius = 14.0
-		cm.height = 220.0
+		cm.bottom_radius = 10.0
+		cm.height = 160.0
 		cm.radial_segments = 24
 		cm.cap_top = false
 		cm.cap_bottom = false
@@ -985,7 +985,7 @@ func _build_lighthouse() -> void:
 		beam.material_override = beam_mat
 		beam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		beam.rotation.z = PI * 0.5 * side
-		beam.position = Vector3(110.0 * side, 0.0, 0)
+		beam.position = Vector3(80.0 * side, 0.0, 0)
 		beam_pivot.add_child(beam)
 	var spot := SpotLight3D.new()
 	spot.light_color = Color(1.0, 0.9, 0.7)
