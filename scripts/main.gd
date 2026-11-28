@@ -5,6 +5,7 @@ extends Node3D
 const PlayerScript := preload("res://scripts/player.gd")
 const IslandScript := preload("res://scripts/island.gd")
 const HudScript := preload("res://scripts/hud.gd")
+const RobotsScript := preload("res://scripts/robots.gd")
 const GrassScript := preload("res://scripts/grass.gd")
 const Kayit := preload("res://scripts/kayit.gd")
 const PropsScript := preload("res://scripts/props.gd")
@@ -58,7 +59,21 @@ const UPGRADES := [
 	{"id": "magnet", "name": "Mıknatıs", "base": 90.0, "growth": 1.4, "max": 20},
 	{"id": "cart", "name": "El arabası", "base": 600.0, "growth": 1.6, "max": 10},
 	{"id": "detector", "name": "Buluntu dedektörü", "base": 250.0, "growth": 1.5, "max": 10},
+	# Makineler: alet kademeleri (her kademe güç ×8, genişlik ×1,35) ve temizlik robotları
+	{"id": "scythe_t", "name": "Tırpan kademesi", "base": 6000.0, "growth": 120.0, "max": 2},
+	{"id": "broom_t", "name": "Tırmık kademesi", "base": 9000.0, "growth": 120.0, "max": 2},
+	{"id": "washer_t", "name": "Yıkayıcı kademesi", "base": 30000.0, "growth": 120.0, "max": 2},
+	{"id": "robot", "name": "Temizlik robotu", "base": 2500.0, "growth": 2.4, "max": 12},
+	{"id": "robot_p", "name": "Robot motoru", "base": 1500.0, "growth": 1.17, "max": -1},
 ]
+# Kademe adları: [aletin adı 1., 2., 3. kademe]
+const TIER_NAMES := [
+	["Tırpan", "Motorlu tırpan", "Biçme makinesi"],
+	["Tırmık", "Yaprak üfleyici", "Süpürme makinesi"],
+	["Yıkayıcı", "Basınçlı yıkayıcı", "Endüstriyel yıkayıcı"],
+]
+const TIER_POWER := 8.0
+const TIER_WIDTH := 1.35
 # Kilometre taşları: sınırsız yükseltmeler bu seviyelere ulaşınca gücü ayrıca ×3 olur
 const MILESTONES := [25, 50, 100, 200, 400]
 const MONEY_PER_PIXEL := 0.04    # temizlenen her piksel (temel)
@@ -95,6 +110,7 @@ var shot_frame := 0
 var tool_names: Array = TOOL_NAMES
 var upgrades: Array = UPGRADES
 var props = null    # props.gd
+var robots = null   # robots.gd
 var spawn_point := Vector3.ZERO
 var sky_mat: ShaderMaterial
 var ocean_mat: ShaderMaterial
@@ -388,6 +404,9 @@ func _build_props() -> void:
 	add_child(props)
 	props.setup(island, m, world_seed)
 	props.ferry_arrived.connect(_on_ferry_arrived)
+	robots = RobotsScript.new()
+	add_child(robots)
+	robots.setup(self)
 
 
 func _build_ocean() -> void:
@@ -1221,27 +1240,46 @@ func detector_range() -> float:
 func money_mult() -> float:
 	return power_mult(lvl("bonus"))
 
+## Aletin kademesi: 0, 1, 2
+func tier(t: int) -> int:
+	return lvl(["scythe_t", "broom_t", "washer_t"][t]) if t <= TOOL_WASHER else 0
+
+
+func _tier_names() -> void:
+	tool_names = TOOL_NAMES.duplicate()
+	for t in 3:
+		tool_names[t] = TIER_NAMES[t][tier(t)]
+
+
+func robot_strength() -> float:
+	return 70.0 * power_mult(lvl("robot_p"))
+
+
+func robot_speed() -> float:
+	return 2.2 + minf(lvl("robot_p"), 60) * 0.04
+
+
 func tool_radius() -> float:
 	match current_tool:
 		TOOL_SCYTHE:
-			return 0.7 * (1.0 + 0.06 * lvl("scythe_w"))
+			return 0.7 * (1.0 + 0.06 * lvl("scythe_w")) * pow(TIER_WIDTH, tier(0))
 		TOOL_RAKE:
-			return 0.8 * (1.0 + 0.06 * lvl("broom_w"))
+			return 0.8 * (1.0 + 0.06 * lvl("broom_w")) * pow(TIER_WIDTH, tier(1))
 		TOOL_VACUUM:
 			return 1.4 + 0.12 * vacuum_level
 	return washer_radius()
 
 func washer_radius() -> float:
-	return 0.5 * (1.0 + 0.06 * lvl("nozzle"))
+	return 0.5 * (1.0 + 0.06 * lvl("nozzle")) * pow(TIER_WIDTH, tier(2))
 
 func washer_strength() -> float:
-	return 80.0 * power_mult(lvl("pressure"))
+	return 80.0 * power_mult(lvl("pressure")) * pow(TIER_POWER, tier(2))
 
 func scythe_strength() -> float:
-	return 100.0 * power_mult(lvl("scythe"))
+	return 100.0 * power_mult(lvl("scythe")) * pow(TIER_POWER, tier(0))
 
 func broom_strength() -> float:
-	return 120.0 * power_mult(lvl("broom"))
+	return 120.0 * power_mult(lvl("broom")) * pow(TIER_POWER, tier(1))
 
 func bag_capacity() -> int:
 	return 6 + 3 * lvl("bag")
@@ -1318,11 +1356,26 @@ func upgrade_effect(id: String) -> String:
 			return "Kilitli" if lvl(id) == 0 else "Dolunca satar · değerin %%%d'i" % int(cart_rate() * 100.0)
 		"detector":
 			return "Kilitli" if lvl(id) == 0 else "Menzil %d m" % int(detector_range())
+		"scythe_t", "broom_t", "washer_t":
+			var t := ["scythe_t", "broom_t", "washer_t"].find(id)
+			var k := tier(t)
+			if k >= 2:
+				return "%s · güç ×%d" % [TIER_NAMES[t][k], int(pow(TIER_POWER, k))]
+			return "%s → %s (güç ×%d)" % [TIER_NAMES[t][k], TIER_NAMES[t][k + 1], int(TIER_POWER)]
+		"robot":
+			return "Kilitli · kendi kendine temizler" if lvl(id) == 0 else "%d robot çalışıyor" % lvl(id)
+		"robot_p":
+			return "Robot gücü ×%s" % _fmt_mult(power_mult(lvl(id)))
 	return ""
 
 
 func _apply_levels() -> void:
 	vacuum_level = lvl("vacuum")
+	_tier_names()
+	if player != null:
+		player.set_tier(tier(0), tier(1), tier(2))
+	if robots != null:
+		robots.set_count(lvl("robot"))
 	if player != null:
 		var k := 1.0 + 0.05 * lvl("shoes")
 		player.walk_speed = 4.5 * k

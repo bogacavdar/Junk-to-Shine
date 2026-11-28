@@ -39,11 +39,12 @@ func _ready() -> void:
 	current_zone = 1
 	clean_pct = 0.8
 	current_tool = TOOL_SCYTHE
-	levels = {"scythe": 13, "scythe_w": 6, "broom": 8, "broom_w": 4, "pressure": 2, "nozzle": 1, "bag": 2}
+	levels = {"scythe": 13, "scythe_w": 6, "broom": 8, "broom_w": 4, "pressure": 2, "nozzle": 1, "bag": 2, "robot": 3, "robot_p": 7, "scythe_t": 1}
 	near_shop = false
 	hud = HudScript.new()
 	add_child(hud)
 	hud.setup(self)
+	_apply_levels()
 	quest_index = 6
 	quest_base = {}
 	journal = [["Selin · telsiz", "Sesim geliyor mu? Fırtınadan beri adaya kimse çıkmadı. İskelenin etrafındaki kuru otlardan başla, tırpanı geniş savur."], ["Buluntu · Paslı anahtar", "Paslı bir anahtar. Nuri Dede'nin kulübesinin anahtarı olabilir."]]
@@ -67,6 +68,9 @@ func _process(_delta: float) -> void:
 		40:
 			_save_shot("2_dukkan_aletler.png")
 			hud._set_shop_tab(2)
+		48:
+			_save_shot("2b_dukkan_makineler.png")
+			hud._set_shop_tab(3)
 		55:
 			_save_shot("3_dukkan_bolgeler.png")
 			shop_open = false

@@ -13,6 +13,10 @@ var tool_root: Node3D
 var tool_nodes: Array[Node3D] = []
 var nozzle_marker: Node3D
 var head_markers: Array = []   # alet başına zemine değen uç (yoksa null)
+var scythe_blade: Node3D
+var rake_head: Node3D
+var gun_body_mat: StandardMaterial3D
+var tier_parts: Array = [null, null, null]   # alet başına motor/ek parça düğümü
 
 const TOOL_BASE := Vector3(0.3, -0.3, -0.55)
 var bob_time := 0.0
@@ -87,6 +91,7 @@ func _build_tools() -> void:
 	blade.position = Vector3(0, -1.6, 0)
 	blade.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	scythe.add_child(blade)
+	scythe_blade = blade
 	var s_tip := Node3D.new()
 	s_tip.position = Vector3(0, -1.62, 0)
 	scythe.add_child(s_tip)
@@ -104,10 +109,13 @@ func _build_tools() -> void:
 	r_stick.radial_segments = 12
 	r_stick.material = wood
 	_add_to(rake, r_stick, Vector3(0, -0.8, 0))
+	rake_head = Node3D.new()
+	rake_head.position = Vector3(0, -1.6, 0)
+	rake.add_child(rake_head)
 	var bar := BoxMesh.new()
 	bar.size = Vector3(0.42, 0.03, 0.035)
 	bar.material = blade_steel
-	_add_to(rake, bar, Vector3(0, -1.6, 0))
+	_add_to(rake_head, bar, Vector3.ZERO)
 	var tine := CylinderMesh.new()
 	tine.top_radius = 0.005
 	tine.bottom_radius = 0.004
@@ -116,7 +124,7 @@ func _build_tools() -> void:
 	tine.material = blade_steel
 	for i in 14:
 		var tx := -0.195 + i * (0.39 / 13.0)
-		var tm := _add_to(rake, tine, Vector3(tx, -1.64, 0.03))
+		var tm := _add_to(rake_head, tine, Vector3(tx, -0.04, 0.03))
 		tm.rotation_degrees = Vector3(-35, 0, 0)
 	var r_tip := Node3D.new()
 	r_tip.position = Vector3(0, -1.69, 0.06)
@@ -128,6 +136,7 @@ func _build_tools() -> void:
 	tool_root.add_child(gun)
 	gun.basis = Basis.looking_at((Vector3(0, 0, -3.0) - TOOL_BASE).normalized(), Vector3.UP)
 	var yellow := _mat(Color(0.95, 0.72, 0.05), 0.4)
+	gun_body_mat = yellow
 	var black := _mat(Color(0.06, 0.06, 0.07), 0.7)
 	var steel := StandardMaterial3D.new()
 	steel.albedo_color = Color(0.75, 0.76, 0.78)
@@ -368,3 +377,44 @@ func _scythe_blade(mat: Material) -> Mesh:
 ## Bıçak sapa dik olarak yana uzanır ve uca doğru öne kıvrılır
 func _blade_pt(t: float, length: float) -> Vector3:
 	return Vector3(-t * length, 0.0, -sin(t * PI * 0.5) * 0.22)
+
+
+## Alet kademeleri: motor gövdesi, daha geniş kafa, farklı renk
+func set_tier(t_scythe: int, t_rake: int, t_washer: int) -> void:
+	var tiers := [t_scythe, t_rake, t_washer]
+	var engine_col := [Color(0.95, 0.42, 0.08), Color(0.85, 0.12, 0.1)]
+	for t in 2:
+		if tier_parts[t] != null:
+			tier_parts[t].queue_free()
+			tier_parts[t] = null
+		var k: int = tiers[t]
+		if k == 0:
+			continue
+		var pod := Node3D.new()
+		pod.position = Vector3(0, -0.25, 0.0)
+		tool_nodes[t].add_child(pod)
+		tier_parts[t] = pod
+		# Motor gövdesi: renkli kapak, siyah silindir, egzoz
+		var shell := BoxMesh.new()
+		shell.size = Vector3(0.13, 0.16, 0.12)
+		shell.material = _mat(engine_col[k - 1], 0.35)
+		_add_to(pod, shell, Vector3(0, 0, 0.07))
+		var cyl := CylinderMesh.new()
+		cyl.top_radius = 0.045
+		cyl.bottom_radius = 0.045
+		cyl.height = 0.1
+		cyl.radial_segments = 14
+		cyl.material = _mat(Color(0.08, 0.08, 0.09), 0.6)
+		var cm := _add_to(pod, cyl, Vector3(0.0, -0.03, 0.13))
+		cm.rotation_degrees = Vector3(0, 0, 90)
+		var pipe := CylinderMesh.new()
+		pipe.top_radius = 0.01
+		pipe.bottom_radius = 0.01
+		pipe.height = 0.08
+		pipe.material = _mat(Color(0.6, 0.6, 0.62), 0.3)
+		_add_to(pod, pipe, Vector3(0.05, 0.08, 0.1))
+	var w := pow(1.35, t_scythe)
+	scythe_blade.scale = Vector3(w, 1.0, w)
+	rake_head.scale = Vector3(pow(1.35, t_rake) * (1.0 if t_rake < 2 else 1.25), 1.0, 1.0)
+	var gun_cols := [Color(0.95, 0.72, 0.05), Color(0.1, 0.35, 0.75), Color(0.85, 0.12, 0.1)]
+	gun_body_mat.albedo_color = gun_cols[clampi(t_washer, 0, 2)]

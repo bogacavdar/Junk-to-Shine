@@ -19,10 +19,12 @@ const UPGRADE_ICON := {
 	"pressure": "yikayici", "nozzle": "yikayici", "vacuum": "supurge",
 	"bag": "canta", "shoes": "ayakkabi", "bonus": "prim",
 	"magnet": "miknatis", "cart": "araba", "detector": "dedektor",
+	"scythe_t": "kademe", "broom_t": "kademe", "washer_t": "kademe", "robot": "robot", "robot_p": "motor",
 }
 const TAB_UPGRADES := [
 	["scythe", "scythe_w", "broom", "broom_w", "pressure", "nozzle", "vacuum"],
 	["bag", "shoes", "bonus", "magnet", "cart", "detector"],
+	["robot", "robot_p", "scythe_t", "broom_t", "washer_t"],
 	[],   # Bölgeler
 ]
 const SETTINGS_PATH := "user://ayarlar.cfg"
@@ -654,8 +656,8 @@ func _build_shop() -> void:
 	var head := _hbox(16, v)
 	_label("Dükkân", 28, TEXT, true, head)
 	var tabs := _hbox(6, head)
-	for i in 3:
-		var tb := _button(["Aletler", "Genel", "Bölgeler"][i], "pill", Vector2(0, 36), 13, false)
+	for i in 4:
+		var tb := _button(["Aletler", "Genel", "Makineler", "Bölgeler"][i], "pill", Vector2(0, 36), 13, false)
 		tb.add_theme_constant_override("h_separation", 0)
 		var st: StyleBoxFlat = tb.get_theme_stylebox("normal")
 		st.content_margin_left = 16
@@ -725,7 +727,7 @@ func _set_shop_tab(i: int) -> void:
 	for c in shop_grid.get_children():
 		c.queue_free()
 	shop_cards.clear()
-	if i < 2:
+	if i < 3:
 		for id: String in TAB_UPGRADES[i]:
 			_add_upgrade_card(id)
 	else:
