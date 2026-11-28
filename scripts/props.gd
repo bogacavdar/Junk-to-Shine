@@ -8,7 +8,21 @@ var mats := {}               # "wood", "concrete", "metal"
 var zone_sets := {}          # bölge -> Array[Dictionary] (yenilenecek parçalar)
 var rng := RandomNumberGenerator.new()
 var _templates := {}         # model yolu -> örnek sahne (parça kopyalamak için)
+var pier_end := Vector3.ZERO # iskelenin deniz ucu (feribot buraya yanaşır)
+var bobbers: Array = []      # [düğüm, taban y, faz] — onarılınca denizde salınan tekneler
+var beam_pivot: Node3D = null
+var lighthouse_on := false
+var lamp_light: OmniLight3D = null
+var glass_mat: StandardMaterial3D = null
+var fountain_fx: CPUParticles3D = null
+var ferry: Node3D = null
+var ferry_t := -1.0          # <0: bekliyor; 0..1 yanaşıyor
+var ferry_from := Vector3.ZERO
+var ferry_to := Vector3.ZERO
+var time := 0.0
+signal ferry_arrived
 
+const Isl := preload("res://scripts/island.gd")
 const DIRTY := Color(0.42, 0.40, 0.34)
 const DECK_Y := 1.35
 const M := "res://assets/models/"
@@ -37,6 +51,12 @@ func setup(isl, materials: Dictionary, seed_value: int) -> void:
 	_build_beach()
 	_build_harbor()
 	_build_nature()
+	_build_boats()
+	_build_village()
+	_build_fields()
+	_build_forest()
+	_build_lighthouse()
+	_build_ferry()
 	for t: Node in _templates.values():
 		t.free()
 	_templates.clear()
@@ -189,6 +209,7 @@ func _build_pier() -> void:
 	for k in 2:
 		_model(root, LAMP, Vector3(x - width * 0.5 + 0.2, DECK_Y, z_start + 6.0 + k * 18.0), PI * 0.5)
 	var end_z := z_start + length - 2.0
+	pier_end = Vector3(x, DECK_Y, z_start + length)
 	var c1 := _model(root, CRATE, Vector3(x - 0.5, DECK_Y, end_z), 0.3)
 	_model(root, PCRATE, Vector3(x + 0.6, DECK_Y, end_z - 0.8), -0.4)
 	_model(root, PCRATE, Vector3(x + 0.6, DECK_Y + 0.25, end_z - 0.75), 0.2)
@@ -447,6 +468,34 @@ func restore(zone: int, instant: bool) -> void:
 					tw2.tween_interval(rng.randf_range(0.2, 1.5))
 					tw2.tween_callback(show_n.show)
 					tw2.tween_callback(hide_n.hide)
+			"appear":
+				var ap: Node3D = item["node"]
+				var full: Vector3 = item["scale"]
+				ap.visible = true
+				if instant:
+					ap.scale = full
+				else:
+					ap.scale = Vector3.ONE * 0.01
+					var tw4 := create_tween()
+					tw4.tween_interval(rng.randf_range(0.2, 1.6))
+					tw4.tween_property(ap, "scale", full, 0.7).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+			"boat":
+				var bt: Node3D = item["node"]
+				var up: Vector3 = item["rot"]
+				var by: float = item["y"]
+				if instant:
+					bt.rotation = up
+					bt.position.y = by
+				else:
+					var tw5 := create_tween()
+					tw5.tween_interval(rng.randf_range(0.0, 1.5))
+					tw5.tween_property(bt, "rotation", up, 2.0).set_trans(Tween.TRANS_SINE)
+					tw5.parallel().tween_property(bt, "position:y", by, 2.0).set_trans(Tween.TRANS_SINE)
+				bobbers.append([bt, by, rng.randf_range(0.0, TAU)])
+			"fountain":
+				fountain_fx.emitting = true
+			"lighthouse":
+				_light_lighthouse(instant)
 			"vanish":
 				var v: Node3D = item["node"]
 				if instant:
@@ -456,3 +505,533 @@ func restore(zone: int, instant: bool) -> void:
 					tw3.tween_interval(rng.randf_range(0.0, 1.0))
 					tw3.tween_property(v, "scale", Vector3.ZERO, 0.6).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
 					tw3.tween_callback(v.hide)
+
+
+
+# ---------------------------------------------------------------------
+# Kare güncellemesi: tekne salınımı, fener ışığı, feribot
+# ---------------------------------------------------------------------
+
+func _process(delta: float) -> void:
+	time += delta
+	for b: Array in bobbers:
+		var n: Node3D = b[0]
+		n.position.y = float(b[1]) + sin(time * 0.9 + float(b[2])) * 0.08
+		n.rotation.z = sin(time * 0.7 + float(b[2]) * 1.7) * 0.03
+	if lighthouse_on and beam_pivot != null:
+		beam_pivot.rotation.y += delta * 0.9
+	if ferry_t >= 0.0 and ferry_t < 1.0:
+		ferry_t = minf(ferry_t + delta / 70.0, 1.0)
+		var e := 1.0 - pow(1.0 - ferry_t, 3.0)    # yavaşlayarak yanaş
+		ferry.position = ferry_from.lerp(ferry_to, e)
+		ferry.position.y = sin(time * 0.6) * 0.12
+		if ferry_t >= 1.0:
+			ferry_arrived.emit()
+	elif ferry != null and ferry.visible:
+		ferry.position.y = sin(time * 0.6) * 0.12
+		ferry.rotation.z = sin(time * 0.45) * 0.012
+
+
+# ---------------------------------------------------------------------
+# Tekne gövdesi: kesitlerden örülmüş yumuşak gövde (SurfaceTool)
+# ---------------------------------------------------------------------
+
+func _hull_mesh(length: float, beam: float, depth: float, flat_stern := 0.85) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var nu := 22
+	var nv := 12
+	var rows: Array = []
+	for i in nu + 1:
+		var u := float(i) / nu                      # 0 = kıç, 1 = pruva
+		var w := beam * 0.5 * sqrt(maxf(0.0, 1.0 - pow(u, 3.0))) * (flat_stern + (1.0 - flat_stern) * sin(PI * u))
+		var top := depth * (1.0 + 0.28 * u * u)
+		var keel := depth * 0.55 * pow(u, 3.0)
+		var row: Array = []
+		for j in nv + 1:
+			var t := PI * float(j) / nv
+			var sx := cos(t)
+			var sy := pow(sin(t), 0.75)
+			var x := w * sx * (1.0 - 0.18 * sy * sy)
+			var y := top - (top - keel) * sy
+			row.append(Vector3(x, y, (u - 0.5) * length))
+		rows.append(row)
+	for i in nu:
+		for j in nv:
+			var a: Vector3 = rows[i][j]
+			var b: Vector3 = rows[i + 1][j]
+			var c: Vector3 = rows[i + 1][j + 1]
+			var d: Vector3 = rows[i][j + 1]
+			var ua := Vector2(float(j) / nv, float(i) / nu)
+			var ub := Vector2(float(j) / nv, float(i + 1) / nu)
+			var uc := Vector2(float(j + 1) / nv, float(i + 1) / nu)
+			var ud := Vector2(float(j + 1) / nv, float(i) / nu)
+			st.set_uv(ua); st.add_vertex(a)
+			st.set_uv(ub); st.add_vertex(b)
+			st.set_uv(uc); st.add_vertex(c)
+			st.set_uv(ua); st.add_vertex(a)
+			st.set_uv(uc); st.add_vertex(c)
+			st.set_uv(ud); st.add_vertex(d)
+	# Kıç aynası (düz kapak)
+	var r0: Array = rows[0]
+	var center := Vector3(0, depth * 0.55, r0[0].z)
+	for j in nv:
+		st.set_uv(Vector2(0.5, 0.0)); st.add_vertex(center)
+		st.set_uv(Vector2(0.0, 0.0)); st.add_vertex(r0[j + 1])
+		st.set_uv(Vector2(1.0, 0.0)); st.add_vertex(r0[j])
+	st.generate_normals()
+	return st.commit()
+
+
+func _paint(col: Color, rough := 0.55) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = col
+	m.roughness = rough
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	return m
+
+
+## Küçük ahşap balıkçı teknesi: boyalı gövde, ahşap oturaklar, kenar şeridi
+func _boat(parent: Node3D, length: float, col: Color) -> Node3D:
+	var root := Node3D.new()
+	parent.add_child(root)
+	var hull := MeshInstance3D.new()
+	hull.mesh = _hull_mesh(length, length * 0.36, length * 0.17)
+	var paint := _paint(col)
+	hull.material_override = paint
+	root.add_child(hull)
+	var wood: Material = mats["wood"]
+	var d := length * 0.17
+	for k in 3:
+		var z := (-0.3 + k * 0.28) * length
+		var u := clampf(z / length + 0.5, 0.0, 1.0)
+		var w := length * 0.36 * sqrt(maxf(0.0, 1.0 - pow(u, 3.0))) * (0.85 + 0.15 * sin(PI * u))
+		_box(root, Vector3(0, d * 0.72, z), Vector3(w * 0.92, 0.05, 0.28), wood)
+	# Kenar şeridi
+	var stripe := _paint(Color(0.12, 0.14, 0.16))
+	var sm := MeshInstance3D.new()
+	sm.mesh = _hull_mesh(length * 1.005, length * 0.365, length * 0.17 * 1.02)
+	sm.material_override = stripe
+	sm.scale = Vector3(1, 0.06, 1)
+	sm.position.y = d * 0.97
+	root.add_child(sm)
+	_register(3, {"kind": "color", "mat": paint, "color": col})
+	paint.albedo_color = col.lerp(Color(0.33, 0.30, 0.25), 0.75)
+	return root
+
+
+func _build_boats() -> void:
+	var harbor := get_node_or_null("Liman") as Node3D
+	if harbor == null:
+		return
+	var shore := _shore_point(Vector2(-1.0, 0.05))
+	var cx := shore.x - 4.0
+	var cols := [Color(0.1, 0.32, 0.6), Color(0.85, 0.82, 0.75), Color(0.72, 0.16, 0.12), Color(0.12, 0.45, 0.38), Color(0.92, 0.7, 0.2)]
+	for i in 5:
+		var L := rng.randf_range(5.0, 7.5)
+		var b := _boat(harbor, L, cols[i])
+		var z := shore.y - 18.0 + i * 9.0
+		var up := Vector3(0, rng.randf_range(-0.08, 0.08), 0)
+		b.position = Vector3(cx - 4.5 - L * 0.22 - 1.0, -0.55, z)
+		b.rotation = Vector3(deg_to_rad(rng.randf_range(-6.0, 6.0)), up.y, deg_to_rad(rng.randf_range(18.0, 32.0)) * (1.0 if i % 2 == 0 else -1.0))
+		_register(3, {"kind": "boat", "node": b, "rot": up, "y": -L * 0.06})
+		# Halat: tekneden babaya
+		var rope := _cylinder(harbor, Vector3(cx - 4.3 - L * 0.11, 1.2, z), 0.025, L * 0.25 + 1.2, _paint(Color(0.55, 0.48, 0.35), 0.9))
+		rope.rotation.z = PI * 0.5 - 0.35
+
+
+# ---------------------------------------------------------------------
+# Köy meydanı (bölge 4): çeşme, banklar, kahve masaları, lambalar
+# ---------------------------------------------------------------------
+
+func _build_village() -> void:
+	var root := Node3D.new()
+	root.name = "Koy"
+	add_child(root)
+	var c2: Vector2 = Isl.PLAZA_CENTER
+	var g := _ground(c2.x, c2.y)
+	# Çeşme: taş havuz, su yüzeyi, orta sütun, üst çanak
+	var stone := _dirty_copy("concrete")
+	_cylinder(root, g + Vector3(0, 0.35, 0), 3.2, 0.7, stone)
+	_collider(g + Vector3(0, 0.35, 0), Vector3(5.6, 0.7, 5.6))
+	var water := StandardMaterial3D.new()
+	water.albedo_color = Color(0.25, 0.22, 0.14)
+	water.roughness = 0.05
+	water.metallic = 0.3
+	_cylinder(root, g + Vector3(0, 0.62, 0), 2.95, 0.06, water)
+	_cylinder(root, g + Vector3(0, 1.3, 0), 0.32, 1.6, stone)
+	_cylinder(root, g + Vector3(0, 2.15, 0), 1.0, 0.22, stone)
+	_register(4, {"kind": "material", "mat": stone})
+	_register(4, {"kind": "color", "mat": water, "color": Color(0.18, 0.42, 0.52)})
+	fountain_fx = CPUParticles3D.new()
+	fountain_fx.position = g + Vector3(0, 2.3, 0)
+	fountain_fx.amount = 160
+	fountain_fx.lifetime = 1.1
+	fountain_fx.direction = Vector3.UP
+	fountain_fx.spread = 18.0
+	fountain_fx.initial_velocity_min = 3.0
+	fountain_fx.initial_velocity_max = 3.6
+	fountain_fx.gravity = Vector3(0, -9.0, 0)
+	fountain_fx.scale_amount_min = 0.05
+	fountain_fx.scale_amount_max = 0.09
+	var drop := SphereMesh.new()
+	drop.radius = 0.5
+	drop.height = 1.0
+	drop.radial_segments = 6
+	drop.rings = 3
+	var dm := StandardMaterial3D.new()
+	dm.albedo_color = Color(0.8, 0.92, 1.0, 0.55)
+	dm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	dm.roughness = 0.05
+	drop.material = dm
+	fountain_fx.mesh = drop
+	fountain_fx.emitting = false
+	root.add_child(fountain_fx)
+	_register(4, {"kind": "fountain"})
+	# Meydan çevresi: banklar, masalar, sandalyeler, lambalar (patikaların üstüne değil)
+	var placed := 0
+	var a := 0.3
+	while placed < 14 and a < TAU + 0.3:
+		var r := 15.0 if placed % 2 == 0 else 20.0
+		var x := c2.x + sin(a) * r
+		var z := c2.y + cos(a) * r
+		a += 0.43
+		if island.path_distance(x, z) < 4.5 and Vector2(x, z).distance_to(c2) > Isl.PLAZA_RADIUS - 1.0:
+			continue
+		var p := _ground(x, z)
+		var face := atan2(c2.x - x, c2.y - z)
+		match placed % 4:
+			0:
+				var bn := _model(root, BENCH, p, face)
+				_fallen(4, bn)
+				_collider(p + Vector3(0, 0.4, 0), Vector3(1.2, 0.8, 0.5), face)
+			1:
+				var t := _model(root, PICNIC, p, face + PI * 0.5)
+				_fallen(4, t)
+				_collider(p + Vector3(0, 0.4, 0), Vector3(2.2, 0.8, 3.0), face + PI * 0.5)
+			2:
+				for k in 3:
+					var ch := _model(root, CHAIR, _ground(x + cos(k * 2.1) * 1.1, z + sin(k * 2.1) * 1.1), rng.randf_range(0.0, TAU))
+					_fallen(4, ch)
+			3:
+				var lp := _model(root, LAMP, p, face)
+				_fallen(4, lp)
+		placed += 1
+
+
+# ---------------------------------------------------------------------
+# Tarlalar (bölge 5): devrik çitler, saman balyaları (bölge bitince dizilir)
+# ---------------------------------------------------------------------
+
+func _zone_spot(zone: int, min_h: float, path_clear: float) -> Variant:
+	for t in 3000:
+		var x := rng.randf_range(-300.0, 300.0)
+		var z := rng.randf_range(-300.0, 300.0)
+		var h: float = island.height_at(x, z)
+		if h < min_h or island.zone_at(x, z) != zone:
+			continue
+		if island.path_distance(x, z) < path_clear:
+			continue
+		return Vector3(x, h, z)
+	return null
+
+
+func _build_fields() -> void:
+	var root := Node3D.new()
+	root.name = "Tarlalar"
+	add_child(root)
+	var wood: Material = mats["wood"]
+	for i in 10:
+		var sp: Variant = _zone_spot(5, 1.8, 6.0)
+		if sp == null:
+			continue
+		var p: Vector3 = sp
+		var ang := rng.randf_range(0.0, PI)
+		var fence := Node3D.new()
+		fence.position = p
+		fence.rotation.y = ang
+		root.add_child(fence)
+		var n := 6
+		for k in n + 1:
+			var px := (k - n * 0.5) * 2.0
+			var gh: float = island.height_at(p.x + cos(ang) * px, p.z - sin(ang) * px) - p.y
+			_box(fence, Vector3(px, gh + 0.55, 0), Vector3(0.12, 1.2, 0.12), wood)
+			if k < n:
+				_box(fence, Vector3(px + 1.0, gh + 0.85, 0), Vector3(2.05, 0.1, 0.05), wood)
+				_box(fence, Vector3(px + 1.0, gh + 0.45, 0), Vector3(2.05, 0.1, 0.05), wood)
+		var up := fence.rotation
+		fence.rotation = Vector3(deg_to_rad(rng.randf_range(55.0, 80.0)) * (1.0 if i % 2 == 0 else -1.0), ang, 0)
+		_register(5, {"kind": "node", "node": fence, "rot": up})
+	# Saman balyaları: başta çürümüş dağınık balyalar, sonra yeni balyalar
+	var old := _paint(Color(0.32, 0.28, 0.2), 1.0)
+	var fresh := _paint(Color(0.84, 0.7, 0.38), 1.0)
+	for i in 8:
+		var sp2: Variant = _zone_spot(5, 1.8, 5.0)
+		if sp2 == null:
+			continue
+		var p2: Vector3 = sp2
+		var rot := rng.randf_range(0.0, TAU)
+		var rotten := _cylinder(root, p2 + Vector3(0, 0.45, 0), 0.75, 1.1, old)
+		rotten.rotation = Vector3(PI * 0.5, rot, 0)
+		rotten.scale = Vector3(1.0, 1.0, 0.6)
+		_register(5, {"kind": "vanish", "node": rotten})
+		for k in 3:
+			var bale := _cylinder(root, p2 + Vector3(cos(rot) * k * 1.3, 0.75, sin(rot) * k * 1.3), 0.75, 1.2, fresh)
+			bale.rotation = Vector3(PI * 0.5, rot + PI * 0.5, 0)
+			bale.visible = false
+			_register(5, {"kind": "appear", "node": bale, "scale": Vector3.ONE})
+
+
+# ---------------------------------------------------------------------
+# Orman (bölge 6): patikaya devrilmiş ağaçlar kalkar, yön tabelası dikilir
+# ---------------------------------------------------------------------
+
+func _path_dir(x: float, z: float) -> float:
+	# Patika yönü: uzaklık alanının eğimine dik
+	var e := 0.5
+	var gx: float = island.path_distance(x + e, z) - island.path_distance(x - e, z)
+	var gz: float = island.path_distance(x, z + e) - island.path_distance(x, z - e)
+	return atan2(gx, gz)
+
+
+func _build_forest() -> void:
+	var root := Node3D.new()
+	root.name = "Orman"
+	add_child(root)
+	var n := 0
+	for t in 6000:
+		if n >= 6:
+			break
+		var x := rng.randf_range(-300.0, 300.0)
+		var z := rng.randf_range(-300.0, 0.0)
+		var h: float = island.height_at(x, z)
+		if h < 1.8 or island.zone_at(x, z) != 6 or island.path_distance(x, z) > 1.2:
+			continue
+		var lg := _model(root, LOG, Vector3(x, h + 0.1, z), _path_dir(x, z), rng.randf_range(1.1, 1.5))
+		_register(6, {"kind": "vanish", "node": lg})
+		n += 1
+	# Yön tabelası: patika üstünde, ormanın içinde
+	for t in 4000:
+		var x := rng.randf_range(-300.0, 300.0)
+		var z := rng.randf_range(-300.0, 0.0)
+		var h: float = island.height_at(x, z)
+		if h < 1.8 or island.zone_at(x, z) != 6:
+			continue
+		var pd: float = island.path_distance(x, z)
+		if pd < 2.6 or pd > 3.4:
+			continue
+		var sign_n := Node3D.new()
+		sign_n.position = Vector3(x, h, z)
+		root.add_child(sign_n)
+		var wood: Material = mats["wood"]
+		_box(sign_n, Vector3(0, 1.2, 0), Vector3(0.14, 2.4, 0.14), wood)
+		var to_l := atan2(Isl.LIGHTHOUSE.x - x, Isl.LIGHTHOUSE.y - z)
+		var arm := _box(sign_n, Vector3(0, 2.0, 0), Vector3(1.6, 0.32, 0.05), _paint(Color(0.85, 0.82, 0.72), 0.8))
+		arm.rotation.y = to_l + PI * 0.5
+		arm.position = Vector3(sin(to_l) * 0.7, 2.0, cos(to_l) * 0.7)
+		var lbl := Label3D.new()
+		lbl.text = "FENER →"
+		lbl.font_size = 64
+		lbl.pixel_size = 0.004
+		lbl.modulate = Color(0.15, 0.15, 0.15)
+		lbl.outline_size = 0
+		lbl.double_sided = true
+		lbl.position = Vector3(0, 0, 0.03)
+		arm.add_child(lbl)
+		sign_n.visible = false
+		_register(6, {"kind": "appear", "node": sign_n, "scale": Vector3.ONE})
+		break
+
+
+# ---------------------------------------------------------------------
+# Fener (bölge 7): tepede beyaz-kırmızı kule; bölge bitince yanar, ışık döner
+# ---------------------------------------------------------------------
+
+func _tapered(parent: Node3D, pos: Vector3, r_bottom: float, r_top: float, height: float, mat: Material, segs := 32) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var cm := CylinderMesh.new()
+	cm.bottom_radius = r_bottom
+	cm.top_radius = r_top
+	cm.height = height
+	cm.radial_segments = segs
+	cm.rings = 1
+	mi.mesh = cm
+	mi.material_override = mat
+	mi.position = pos
+	parent.add_child(mi)
+	return mi
+
+
+func _build_lighthouse() -> void:
+	var lh: Vector2 = Isl.LIGHTHOUSE
+	# Tepenin en yüksek yakın noktasını bul
+	var best := Vector3(lh.x, island.height_at(lh.x, lh.y), lh.y)
+	for t in 60:
+		var q := lh + Vector2(rng.randf_range(-12.0, 12.0), rng.randf_range(-12.0, 12.0))
+		var hq: float = island.height_at(q.x, q.y)
+		if hq > best.y:
+			best = Vector3(q.x, hq, q.y)
+	var root := Node3D.new()
+	root.name = "Fener"
+	root.position = best - Vector3(0, 0.4, 0)
+	add_child(root)
+	var dir := "res://assets/textures/"
+	var white := StandardMaterial3D.new()
+	white.albedo_texture = load(dir + "beige_wall_001_diff.jpg")
+	white.normal_enabled = true
+	white.normal_texture = load(dir + "beige_wall_001_nor.jpg")
+	white.roughness_texture = load(dir + "beige_wall_001_rough.png")
+	white.uv1_triplanar = true
+	white.uv1_scale = Vector3.ONE * 0.5
+	var red := white.duplicate() as StandardMaterial3D
+	white.albedo_color = Color(1.0, 1.0, 0.98)
+	red.albedo_color = Color(0.78, 0.14, 0.1)
+	var brick := StandardMaterial3D.new()
+	brick.albedo_texture = load(dir + "red_bricks_04_diff.jpg")
+	brick.normal_enabled = true
+	brick.normal_texture = load(dir + "red_bricks_04_nor.jpg")
+	brick.uv1_triplanar = true
+	brick.uv1_scale = Vector3.ONE * 0.6
+	# Kaide
+	_tapered(root, Vector3(0, 1.2, 0), 4.6, 4.4, 2.4, brick, 8)
+	# Gövde: 5 bant, yukarı doğru incelir
+	var h0 := 2.4
+	var H := 20.0
+	for k in 5:
+		var y0 := h0 + H * k / 5.0
+		var rb := lerpf(3.4, 2.3, float(k) / 5.0)
+		var rt := lerpf(3.4, 2.3, float(k + 1) / 5.0)
+		_tapered(root, Vector3(0, y0 + H / 10.0, 0), rb, rt, H / 5.0 + 0.01, white if k % 2 == 0 else red)
+	# Balkon ve korkuluk
+	var metal: Material = mats["metal"]
+	var top := h0 + H
+	_tapered(root, Vector3(0, top + 0.15, 0), 3.3, 3.3, 0.3, metal, 24)
+	var rail := MeshInstance3D.new()
+	var tm := TorusMesh.new()
+	tm.inner_radius = 3.1
+	tm.outer_radius = 3.2
+	tm.rings = 48
+	rail.mesh = tm
+	rail.material_override = metal
+	rail.position = Vector3(0, top + 1.2, 0)
+	root.add_child(rail)
+	for k in 16:
+		var a := TAU * k / 16.0
+		_box(root, Vector3(cos(a) * 3.15, top + 0.7, sin(a) * 3.15), Vector3(0.06, 1.0, 0.06), metal)
+	# Fener odası: cam, çerçeve, kubbe
+	glass_mat = StandardMaterial3D.new()
+	glass_mat.albedo_color = Color(0.25, 0.28, 0.27, 0.55)
+	glass_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	glass_mat.roughness = 0.08
+	glass_mat.metallic = 0.4
+	glass_mat.emission_enabled = true
+	glass_mat.emission = Color(1.0, 0.85, 0.55)
+	glass_mat.emission_energy_multiplier = 0.0
+	_tapered(root, Vector3(0, top + 1.6, 0), 1.7, 1.7, 2.6, glass_mat, 16)
+	for k in 8:
+		var a := TAU * k / 8.0
+		_box(root, Vector3(cos(a) * 1.72, top + 1.6, sin(a) * 1.72), Vector3(0.08, 2.6, 0.08), metal)
+	_tapered(root, Vector3(0, top + 3.6, 0), 1.9, 0.12, 1.5, red, 24)
+	_cylinder(root, Vector3(0, top + 4.6, 0), 0.05, 0.9, metal)
+	# Kapı
+	_box(root, Vector3(0, 3.4, 3.38), Vector3(1.3, 2.2, 0.12), mats["wood"])
+	_collider(Vector3(best.x, best.y + 6.0, best.z), Vector3(6.6, 13.0, 6.6))
+	# Işık: lamba + dönen iki huzme
+	lamp_light = OmniLight3D.new()
+	lamp_light.position = Vector3(0, top + 1.6, 0)
+	lamp_light.light_color = Color(1.0, 0.85, 0.6)
+	lamp_light.light_energy = 0.0
+	lamp_light.omni_range = 40.0
+	root.add_child(lamp_light)
+	beam_pivot = Node3D.new()
+	beam_pivot.position = Vector3(0, top + 1.6, 0)
+	beam_pivot.visible = false
+	root.add_child(beam_pivot)
+	var beam_mat := ShaderMaterial.new()
+	beam_mat.shader = load("res://shaders/beam.gdshader")
+	for side in [1.0, -1.0]:
+		var beam := MeshInstance3D.new()
+		var cm := CylinderMesh.new()
+		cm.top_radius = 0.6
+		cm.bottom_radius = 14.0
+		cm.height = 220.0
+		cm.radial_segments = 24
+		cm.cap_top = false
+		cm.cap_bottom = false
+		beam.mesh = cm
+		beam.material_override = beam_mat
+		beam.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		beam.rotation.z = PI * 0.5 * side
+		beam.position = Vector3(110.0 * side, 0.0, 0)
+		beam_pivot.add_child(beam)
+	var spot := SpotLight3D.new()
+	spot.light_color = Color(1.0, 0.9, 0.7)
+	spot.light_energy = 6.0
+	spot.spot_range = 160.0
+	spot.spot_angle = 6.0
+	spot.rotation = Vector3(-0.06, PI * 0.5, 0)
+	beam_pivot.add_child(spot)
+	_register(7, {"kind": "material", "mat": white})
+	_register(7, {"kind": "color", "mat": red, "color": red.albedo_color})
+	white.albedo_color = DIRTY
+	red.albedo_color = Color(0.36, 0.2, 0.16)
+	_register(7, {"kind": "lighthouse"})
+
+
+func _light_lighthouse(instant: bool) -> void:
+	lighthouse_on = true
+	beam_pivot.visible = true
+	if instant:
+		lamp_light.light_energy = 4.0
+		glass_mat.emission_energy_multiplier = 3.0
+		ferry.visible = true
+		ferry.position = ferry_to
+		ferry_t = 1.0
+		return
+	var tw := create_tween()
+	tw.tween_interval(1.5)
+	tw.tween_property(lamp_light, "light_energy", 4.0, 2.0)
+	tw.parallel().tween_property(glass_mat, "emission_energy_multiplier", 3.0, 2.0)
+	tw.tween_callback(func() -> void:
+		ferry.visible = true
+		ferry.position = ferry_from
+		ferry_t = 0.0)
+
+
+# ---------------------------------------------------------------------
+# Feribot: fener yanınca açıktan gelip iskelenin yanına yanaşır
+# ---------------------------------------------------------------------
+
+func _build_ferry() -> void:
+	ferry = Node3D.new()
+	ferry.name = "Feribot"
+	add_child(ferry)
+	var hull := MeshInstance3D.new()
+	hull.mesh = _hull_mesh(26.0, 8.0, 3.2, 0.95)
+	hull.material_override = _paint(Color(0.92, 0.93, 0.92), 0.4)
+	hull.position.y = -1.6
+	ferry.add_child(hull)
+	var band := MeshInstance3D.new()
+	band.mesh = _hull_mesh(26.1, 8.05, 3.2, 0.95)
+	band.material_override = _paint(Color(0.1, 0.25, 0.5), 0.4)
+	band.scale = Vector3(1, 0.12, 1)
+	band.position.y = -1.6 + 2.2
+	ferry.add_child(band)
+	var deck := _paint(Color(0.55, 0.5, 0.45), 0.8)
+	_box(ferry, Vector3(0, 1.75, -1.5), Vector3(7.0, 0.15, 20.0), deck)
+	var cabin := _paint(Color(0.95, 0.95, 0.94), 0.35)
+	_box(ferry, Vector3(0, 3.1, -2.5), Vector3(6.0, 2.6, 11.0), cabin)
+	_box(ferry, Vector3(0, 5.2, -1.0), Vector3(4.6, 1.6, 4.6), cabin)
+	var win := _paint(Color(0.08, 0.12, 0.16), 0.1)
+	win.metallic = 0.6
+	for side in [-1.0, 1.0]:
+		_box(ferry, Vector3(3.02 * side, 3.4, -2.5), Vector3(0.05, 0.9, 9.6), win)
+	_box(ferry, Vector3(0, 5.3, 1.32), Vector3(4.0, 0.8, 0.05), win)
+	var funnel := _cylinder(ferry, Vector3(0, 6.9, -3.0), 0.7, 2.2, _paint(Color(0.75, 0.15, 0.1), 0.5))
+	funnel.rotation.x = -0.12
+	ferry.visible = false
+	# Yanaşma: iskele ucunun yanında, açıktan (güneyden) gelir
+	ferry_to = Vector3(pier_end.x + 10.0, 0.0, pier_end.z - 4.0)
+	ferry_from = ferry_to + Vector3(60.0, 0.0, 380.0)
+	ferry.position = ferry_from
+	ferry.rotation.y = atan2(ferry_to.x - ferry_from.x, ferry_to.z - ferry_from.z)

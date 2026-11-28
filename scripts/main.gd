@@ -387,6 +387,7 @@ func _build_props() -> void:
 	props = PropsScript.new()
 	add_child(props)
 	props.setup(island, m, world_seed)
+	props.ferry_arrived.connect(_on_ferry_arrived)
 
 
 func _build_ocean() -> void:
@@ -1039,6 +1040,11 @@ func _update_zones(delta: float) -> void:
 			_show_banner("%s TERTEMİZ!  +%s" % [_tr_upper(str(IslandScript.ZONE_NAMES[zn])), _fmt(reward)])
 			for i in 8:
 				get_tree().create_timer(0.08 * i).timeout.connect(_play_blip.bind(coin_stream, 0.8 + i * 0.1, -4.0))
+
+
+func _on_ferry_arrived() -> void:
+	_show_banner("İLK FERİBOT YANAŞTI!")
+	_message("Selin · iskele", "Feribottan iniyorum! Adayı tanıyamadım… Hoş geldin demek bana düşerdi ama sen bizi karşıladın. Fenerin ışığını karşı kıyıdan herkes gördü.")
 
 
 # =====================================================================
